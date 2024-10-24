@@ -58,6 +58,106 @@ class HeatDgmLoss(nn.Module):
 
         return residual_error, initial_error, boundary_error
     
+class BurgerDGMLoss(nn.Module):
+    def __init__(self, lambda1: float, lambda2: float, lambda3: float):
+        super().__init__()
+        self.lambda1 = lambda1  # Penalty for initial condition
+        self.lambda2 = lambda2  # Penalty for periodic boundary condition
+        self.lambda3 = lambda3  # Penalty for periodic boundary derivatives
+       
+    def raw_residual(self, u, t, W_d, X, nu, alpha):
+        """
+        Parameters:
+        - u: torch.Tensor, the predicted solution by the neural network
+        - t: torch.Tensor, time variable
+        - W_d: torch.Tensor, space-time white noise
+        - X: torch.Tensor, spatial variable in d dimensions
+        - nu: torch.Tensor, viscosity coefficient
+        - alpha: torch.Tensor, noise coefficient
+        Returns:
+        - residual: torch.Tensor, the raw PDE residual
+        """
+        # Compute time derivative u_t = du/dt
+        u_t = torch.autograd.grad(u, t, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+       
+        # Compute spatial derivatives: first (u_x) and second derivatives (u_xx) using autograd
+        u_x = torch.autograd.grad(u, X, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+        u_xx = torch.autograd.grad(u_x, X, grad_outputs=torch.ones_like(u_x), create_graph=True)[0]
+       
+        # Compute the Laplacian (Δu)
+        u_laplace = torch.sum(u_xx, dim=1, keepdim=True)
+       
+        # Compute convection term (u·∇u)
+        convection_term = torch.sum(u * u_x, dim=1, keepdim=True)
+       
+        # Compute stochastic term (σ(u) = αu^d where d is the number of spatial dimensions)
+        stochastic_term = alpha * torch.pow(u, X.shape[1]) * W_d
+       
+        # PDE residual (stochastic Burgers' equation)
+        residual = u_t + convection_term - nu * u_laplace - stochastic_term
+       
+        return residual
+
+    def forward(self, u, u0, t, W_d, X, boundary_mask, nu, alpha):
+        # PDE residual error
+        residual = self.raw_residual(u, t, W_d, X, nu, alpha)
+        residual_error = torch.mean(residual**2)
+
+        # Initial condition error (only for points at t=0)
+        t_zero_mask = t.abs() < 1e-6
+        if t_zero_mask.any():
+            initial_condition = torch.prod(torch.sin(X[t_zero_mask] * torch.pi), dim=1, keepdim=True)
+            initial_error = self.lambda1 * torch.mean((u[t_zero_mask] - initial_condition)**2)
+        else:
+            initial_error = torch.tensor(0.0, device=u.device)
+
+        # Periodic boundary condition errors
+        boundary_points = X[boundary_mask]
+        u_boundary = u[boundary_mask]
+        boundary_error = 0
+
+        if len(boundary_points) > 0:  # Only proceed if we have boundary points
+            for i in range(X.shape[1]):
+                # Find points at x_i = 0 and x_i = 1
+                mask_0 = boundary_points[:, i] == 0
+                mask_1 = boundary_points[:, i] == 1
+                
+                if mask_0.any() and mask_1.any():
+                    # Get the gradient for all boundary points at once
+                    grad_u = torch.autograd.grad(u_boundary, X, 
+                                            grad_outputs=torch.ones_like(u_boundary),
+                                            create_graph=True)[0][boundary_mask]
+                    
+                    points_0 = boundary_points[mask_0]
+                    points_1 = boundary_points[mask_1]
+                    u_0 = u_boundary[mask_0]
+                    u_1 = u_boundary[mask_1]
+                    grad_0 = grad_u[mask_0]
+                    grad_1 = grad_u[mask_1]
+
+                    # Create matrices for broadcasting comparison
+                    points_0_expanded = points_0.unsqueeze(1)  # [N0, 1, d]
+                    points_1_expanded = points_1.unsqueeze(0)  # [1, N1, d]
+
+                    # Find matching pairs (ignore i-th dimension)
+                    mask_dims = torch.ones(X.shape[1], dtype=torch.bool)
+                    mask_dims[i] = False
+                    matches = torch.all(
+                        points_0_expanded[:, :, mask_dims] == points_1_expanded[:, :, mask_dims],
+                        dim=-1
+                    )  # [N0, N1]
+
+                    # Compute errors for matching pairs
+                    if matches.any():
+                        match_indices = torch.where(matches)
+                        u_diffs = u_0[match_indices[0]] - u_1[match_indices[1]]
+                        grad_diffs = grad_0[match_indices[0]] - grad_1[match_indices[1]]
+                        
+                        boundary_error += self.lambda2 * torch.mean(u_diffs**2)
+                        boundary_error += self.lambda3 * torch.mean(grad_diffs**2)
+
+        return residual_error, initial_error, boundary_error
+
 
 
 class HeatMIMLoss(nn.Module):
@@ -85,8 +185,14 @@ class HeatMIMLoss(nn.Module):
             div_p += p_x[:, i].unsqueeze(1)
         
         # PDE residual (stochastic heat equation)
-        residual = u_t - div_p - u * W_d
-        return residual
+        mim_residual = u_t - div_p - u * W_d
+
+        u_x = torch.autograd.grad(u, X, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+        u_xx = torch.autograd.grad(u_x, X, grad_outputs=torch.ones_like(u_x), create_graph=True)[0]
+        u_laplace = torch.sum(u_xx, dim=1, keepdim=True)
+        dgm_residual = u_t - u_laplace - u * W_d
+
+        return mim_residual, dgm_residual
 
     def forward(self, u, p, t, W_d, X):
         """
@@ -102,8 +208,9 @@ class HeatMIMLoss(nn.Module):
 
 
         # PDE residual (stochastic heat equation)
-        residual = self.raw_resdiual(u, p, t, W_d, X)
+        residual, dgm_resdiual = self.raw_resdiual(u, p, t, W_d, X)
         residual_error = torch.mean(residual**2)
+        dgm_resdiual_error = torch.mean(dgm_resdiual**2)
 
         # Consistency between u and p
         grad_u = torch.autograd.grad(u, X, grad_outputs=torch.ones_like(u), create_graph=True)[0]
@@ -112,51 +219,74 @@ class HeatMIMLoss(nn.Module):
         # Total loss
      
 
-        return residual_error, consistency_error
+        return dgm_resdiual_error, residual_error, consistency_error
 
-if __name__ == "__main__":
-    from models import DGM, HeatMIM
-    torch.manual_seed(0)
+class BurgerMIMLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
 
-    # Dimensions for dummy data
-    N = 64  # Number of grid points (spatial)
-    d = 2   # Number of spatial dimensions
-    T = 1.0  # Total time duration
-    dt = 0.01  # Time step
-    time_steps = int(T / dt)  # Number of time steps
+    def raw_residual(self, u, p, t, W_d, X, nu, alpha):
+        """
+        Parameters:
+        - u: torch.Tensor, the predicted solution by the neural network
+        - p: torch.Tensor, the predicted gradient of u
+        - t: torch.Tensor, time variable
+        - W_d: torch.Tensor, space-time white noise
+        - X: torch.Tensor, spatial variable in d dimensions
+        - nu: torch.Tensor, viscosity coefficient
+        - alpha: torch.Tensor, noise coefficient
+        Returns:
+        - residual: torch.Tensor, the raw PDE residual
+        """
+        # Compute time derivative u_t = du/dt
+        u_t = torch.autograd.grad(u, t, grad_outputs=torch.ones_like(u), create_graph=True)[0]
 
-    # Generate random spatial coordinates (X) and time (t) with requires_grad=True
-    X = torch.rand((N, d), dtype=torch.float32, requires_grad=True)  # Random spatial coordinates in [0, 1]^d
-    t = torch.rand((N, 1), dtype=torch.float32, requires_grad=True)  # Random time in [0, 1]
-    t_0 = torch.zeros((N, 1), dtype=torch.float32)  # Initial time
+        # Compute the divergence of p (which should equal Laplacian of u)
+        div_p = torch.zeros_like(u)
+        for i in range(X.shape[1]):  # Loop over spatial dimensions
+            p_x = torch.autograd.grad(p[:, i], X, grad_outputs=torch.ones_like(p[:, i]), create_graph=True)[0]
+            div_p += p_x[:, i].unsqueeze(1)
 
-    # Initialize the neural network
-    input_dim = d
-    # Generate space-time white noise 'W_d' for testing purposes (size matching 'u')
-    W_d = torch.randn((N, 1), dtype=torch.float32)  # Random space-time white noise
-    # Create a boundary mask for Neumann boundary conditions (for simplicity, assume half are boundary points)
-    boundary_mask = torch.zeros(N, dtype=torch.bool)
-    boundary_mask[:N // 2] = 1  # Mark first half as boundary points
+        # Compute convection term (u·p instead of u·∇u since p represents ∇u)
+        convection_term = torch.sum(u * p, dim=1, keepdim=True)
 
-    # Initialize the DGM loss function with lambda1 and lambda2
-    lambda1 = 1.0
-    lambda2 = 1.0
-    dgm_heat_loss = HeatDgmLoss(lambda1, lambda2)
-    mim_heat_loss = HeatMIMLoss()
+        # Compute stochastic term
+        stochastic_term = alpha * (u**X.shape[1]) * W_d
+        
+        # PDE residual (stochastic Burgers' equation)
+        residual = u_t + convection_term - nu * div_p - stochastic_term
 
-    dgm = DGM(input_dim, [128, 128], 'relu')
-    # Forward pass through the neural network (u is now a function of both X and t)
-    dgm_u = dgm(X, t)
-    dgm_u0 = dgm(X, t_0)
+        # Compute the Laplacian (Δu)
+        u_x = torch.autograd.grad(u, X, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+        u_xx = torch.autograd.grad(u_x, X, grad_outputs=torch.ones_like(u_x), create_graph=True)[0]
+        u_laplace = torch.sum(u_xx, dim=1, keepdim=True)
+        dgm_residual = u_t + convection_term - nu * u_laplace - stochastic_term
 
-    mim = HeatMIM(input_dim, [128, 128], [128, 128], 'relu')
-    # Forward pass through the neural network (u and p are now functions of both X and t)
-    mim_u, mim_p = mim(X, t)
+        
+        return residual, dgm_residual
+        
+    def forward(self, u, p, t, W_d, X, nu, alpha):
+        """
+        Parameters:
+        - u: torch.Tensor, the predicted solution by the neural network
+        - p: torch.Tensor, the predicted gradient of u
+        - t: torch.Tensor, time variable
+        - W_d: torch.Tensor, space-time white noise
+        - X: torch.Tensor, spatial variable in d dimensions
+        - nu: torch.Tensor, viscosity coefficient
+        - alpha: torch.Tensor, noise coefficient
+        Returns:
+        - residual_error: PDE residual error
+        - consistency_error: Error between predicted and computed gradients
+        """
+        # PDE residual error
+        residual, dgm_residual = self.raw_residual(u, p, t, W_d, X, nu, alpha)
+        residual_error = torch.mean(residual**2)
+        dgm_resdiual_error = torch.mean(dgm_residual**2)
 
-    # Test the loss function
-    dgm_loss = dgm_heat_loss(u=dgm_u, u0=dgm_u0, t=t, W_d=W_d, X=X, boundary_mask=boundary_mask)
-    mim_loss = mim_heat_loss(u=mim_u, p=mim_p, t=t, W_d=W_d, X=X)
+        # Consistency between u and p (p should equal ∇u)
+        grad_u = torch.autograd.grad(u, X, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+        consistency_error = torch.mean((grad_u - p)**2)
 
-    # Print the result
-    print("DGM Loss:", dgm_loss.item())
-    print("MIM Loss:", mim_loss.item())
+        return dgm_resdiual_error, residual_error, consistency_error
+
