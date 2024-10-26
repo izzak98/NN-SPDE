@@ -9,21 +9,30 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def train_heat():
-    input_dims = 32
+    input_dims = 8
     mim_params = {
-        "input_dims": input_dims,
-        "u_hidden_dims": [128, 128],
-        "p_hidden_dims": [128, 128],
-        "u_activation": "relu",
-        "u_out_activation": "tanh",
-        "p_activation": "relu",
-        "p_out_activation": "tanh",
+        "input_dims":input_dims,
+        "u_hidden_dims":[50, 50],
+        "u_activation":'tanh',
+        "u_dgm_dims":50,
+        "u_n_dgm_layers":2,
+        "u_dgm_activation":'tanh',
+        "u_out_activation":None,
+        "p_hidden_dims":[50, 50],
+        "p_activation":'tanh',
+        "p_dgm_dims":50,
+        "p_n_dgm_layers":2,
+        "p_dgm_activation":'tanh',
+        "p_out_activation":None
     }
     dgm_params = {
-        "input_dims": input_dims,
-        "hidden_dims": [128, 128],
-        "activation": "relu",
-        "output_activation": "tanh",
+        "input_dims":input_dims,
+        "hidden_dims":[50, 50],
+        "dgm_dims":50,
+        "n_dgm_layers":2,
+        "hidden_activation":'tanh',
+        "dgm_activation":'tanh',
+        "output_activation":None
     }
 
     mim = HeatMIM(**mim_params).to(DEVICE)
@@ -31,18 +40,18 @@ def train_heat():
 
     data_generator = HeatDataGenerator(256, input_dims)
 
-    mim_loss_fn = HeatMIMLoss()
-    dgm_loss_fn = HeatDgmLoss(1.0, 1.0)
+    mim_loss_fn = HeatMIMLoss(0.00)
+    dgm_loss_fn = HeatDgmLoss(1, 1)
 
-    mim_optimizer = torch.optim.Adam(mim.parameters(), lr=1e-4)
+    mim_optimizer = torch.optim.Adam(mim.parameters(), lr=1e-5)
     dgm_optimizer = torch.optim.Adam(dgm.parameters(), lr=1e-4)
 
     mim_best_loss, mim_losses, mim = train_mim_heat(
-        mim, mim_optimizer, mim_loss_fn, data_generator, epochs=100
+        mim, mim_optimizer, mim_loss_fn, data_generator, epochs=1000
     )
 
     dgm_best_loss, dgm_losses, dgm = train_dgm_heat(
-        dgm, dgm_optimizer, dgm_loss_fn, data_generator, epochs=100
+        dgm, dgm_optimizer, dgm_loss_fn, data_generator, epochs=1000
     )
 
     print(f"MIM best loss: {mim_best_loss}")
