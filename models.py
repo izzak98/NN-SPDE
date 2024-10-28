@@ -70,7 +70,8 @@ def create_fc_layers(input_dim: int,
     dense_layers_list = nn.ModuleList()
     output_layers = nn.ModuleList()
     dgm_layers_list = None
-    output_layer_in_params = input_dim
+    output_layer_in_params = 1
+    input_layer = nn.Linear(input_dim, output_dim)
     if hidden_dims:
         input_layer = nn.Linear(input_dim, hidden_dims[0])
         if dense_activation:
@@ -93,6 +94,9 @@ def create_fc_layers(input_dim: int,
     if output_activation:
         output_layers.append(get_activation(output_activation))
     output_layer = nn.Sequential(*output_layers)
+
+    if not dense_layers_list and not dgm_layers_list:
+        input_layer = nn.Sequential(input_layer, get_activation(dense_activation))
 
     return input_layer, dense_layers_list, dgm_layers_list, output_layer
 
