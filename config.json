@@ -3,5 +3,7 @@
     "batch_size": 256,
     "trials": 100,
     "threads": 4,
-    "study_dims": [1, 2, 4, 8, 16, 32]
+    "study_dims": [1, 2, 4, 8, 16, 32],
+    "random_seed": 271198,
+    "n_points": 1000
 }
