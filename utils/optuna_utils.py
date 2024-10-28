@@ -1,13 +1,18 @@
 def gen_dgm_params(trial):
-    n_hidden = trial.suggest_int("n_hidden", 1, 3)
+    n_hidden = trial.suggest_int("n_hidden", 0, 5)
     hidden_dims = [trial.suggest_categorical(
         f"n_params_{i}", [4, 8, 16, 32, 64, 128, 256, 512]) for i in range(n_hidden)]
+    dgm_dims = trial.suggest_categorical("dgm_dims", [0, 4, 8, 16, 32, 64, 128, 256])
     params = {
         "hidden_dims": hidden_dims,
-        "activation": trial.suggest_categorical("activation", ["relu", "tanh", "sigmoid"]),
+        "dgm_dims": dgm_dims,
+        "n_dgm_layers": trial.suggest_int("n_dgm_layers", 1, 5) if dgm_dims > 0 else 0,
+        "hidden_activation": trial.suggest_categorical("hidden_activation", ["relu", "tanh", "sigmoid"]),
+        "dgm_activation": trial.suggest_categorical("dgm_activation", ["relu", "tanh", "sigmoid"]) if dgm_dims > 0 else "",
         "output_activation": trial.suggest_categorical("output_activation", ["relu", "tanh", "sigmoid", ""])
     }
     return params
+
 
 def gen_mim_params(trial):
     n_u_hidden = trial.suggest_int("n_u_hidden", 1, 3)
@@ -25,7 +30,3 @@ def gen_mim_params(trial):
         "p_output_activation": trial.suggest_categorical("p_output_activation", ["relu", "tanh", "sigmoid", ""]),
     }
     return params
-
-
-
-
