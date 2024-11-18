@@ -1,8 +1,8 @@
 {
-    "epochs": 150,
+    "epochs": 300,
     "trials": 15,
-    "threads": 2,
-    "study_dims": [2, 4],
+    "threads": 1,
+    "study_dims": [2],
     "random_seed": 271198,
     "n_points": 1000
 }
