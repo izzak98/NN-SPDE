@@ -56,7 +56,7 @@ class HeatDGMLoss(nn.Module):
 
     def compute_initial_error(self, u0, X):
         """Compute initial condition error"""
-        target = torch.prod(torch.sin(X * torch.pi), dim=1, keepdim=True)
+        target = torch.prod(torch.cos(X * torch.pi), dim=1, keepdim=True)
         return self.lambda1 * torch.mean((u0 - target)**2)
 
     def compute_regularization(self, u):

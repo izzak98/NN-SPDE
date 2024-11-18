@@ -144,7 +144,6 @@ class HeatDGM(nn.Module):
             for layer in self.dgm_layers:
                 S = layer(input_x, S, S1)
             input_x = S
-
         return self.output_layer(input_x)
 
 
@@ -192,7 +191,7 @@ class HeatMIM(nn.Module):
         # Implement the initial condition: u(0, x) = prod(sin(pi * x_i))
         with torch.no_grad():
             initial_condition = torch.prod(
-                torch.sin(torch.pi * X), dim=1, keepdim=True)
+                torch.cos(torch.pi * X), dim=1, keepdim=True)
         return initial_condition
 
     def boundary_condition(self, X):
