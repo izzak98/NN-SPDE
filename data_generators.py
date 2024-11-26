@@ -101,7 +101,7 @@ class HeatDataGenerator:
         if white_noise_seed is None:
             white_noise_seed = epoch_seed
         W_d = BS.simulate(
-            all_points, seed=white_noise_seed).unsqueeze(1)
+            all_points, seed=white_noise_seed).view(-1, 1)
 
         # Split results back into categories
         results = []
