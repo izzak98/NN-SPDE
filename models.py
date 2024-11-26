@@ -36,7 +36,8 @@ class DGMLayer(nn.Module):
         # H transformation
         self.U_h = nn.Linear(hidden_dim, hidden_dim)
         self.W_h = nn.Linear(hidden_dim, hidden_dim)
-        self.B_h = nn.Linear(hidden_dim, hidden_dim)  # Bias term for H transformation
+        # Bias term for H transformation
+        self.B_h = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, x, S, S1):
         # Calculate gates with biases and activation functions
@@ -129,6 +130,13 @@ class HeatDGM(nn.Module):
             n_dgm_layers, output_activation)
         self.input_layer, self.hidden_layers, self.dgm_layers, self.output_layer = layers
 
+    def initial_condition(self, X):
+        # Implement the initial condition: u(0, x) = prod(sin(pi * x_i))
+        with torch.no_grad():
+            initial_condition = torch.prod(
+                torch.cos(torch.pi * X), dim=1, keepdim=True)
+        return initial_condition
+
     def forward(self, X, t):
         inps = torch.cat([X, t], dim=1)
         input_x = self.input_layer(inps)
@@ -144,7 +152,9 @@ class HeatDGM(nn.Module):
             for layer in self.dgm_layers:
                 S = layer(input_x, S, S1)
             input_x = S
-        return self.output_layer(input_x)
+        X_copy = X.clone().detach().requires_grad_(False)
+        t_copy = t.clone().detach().requires_grad_(False)
+        return t_copy * self.output_layer(input_x) + self.initial_condition(X_copy)
 
 
 class HeatMIM(nn.Module):
@@ -194,11 +204,19 @@ class HeatMIM(nn.Module):
                 torch.cos(torch.pi * X), dim=1, keepdim=True)
         return initial_condition
 
-    def boundary_condition(self, X):
-        # Implement the boundary condition: p(t, x) = x(1-x) * p(t, x)
-        with torch.no_grad():
-            boundary_condition = X * (1-X)
-        return boundary_condition
+    def L_N(self, x):
+        # Distance function that is 0 on boundary
+        return x * (1 - x)
+
+    def grad_L_N(self, x):
+        # Gradient of L_N
+        return 1 - 2*x
+
+    def F_N(self, x, N_star):
+        # Construct F_N according to paper
+        # For du/dn = 0 case, G_N = 0
+        normal = torch.ones_like(x)  # Unit normal vector
+        return -torch.sum(N_star * normal, dim=1, keepdim=True) / torch.sum(self.grad_L_N(x) * normal, dim=1, keepdim=True)
 
     def forward(self, X, t):
         """
@@ -241,7 +259,9 @@ class HeatMIM(nn.Module):
             p_input = S
 
         p_homogeneous = self.p_output_layer(p_input)
-        p = self.boundary_condition(X_copy) * p_homogeneous
+        F = self.F_N(X_copy, p_homogeneous)
+        grad_L = self.grad_L_N(X_copy)
+        p = F * grad_L + p_homogeneous
 
         return u, p
 
@@ -302,9 +322,10 @@ class BurgersMIM(nn.Module):
         p_out_activation: str
     ):
         super(HeatMIM, self).__init__()
-        self.periodic_transformer = PeriodicTransform([1]*input_dims, harmonics=2)
+        self.periodic_transformer = PeriodicTransform(
+            [1]*input_dims, harmonics=2)
 
-        input_dims  = 2 * 2 * input_dims + 1 + 2 # Add periodic boundary conditions
+        input_dims = 2 * 2 * input_dims + 1 + 2  # Add periodic boundary conditions
 
         self.input_dims = input_dims
         self.u_hidden_dims = u_hidden_dims
@@ -331,14 +352,13 @@ class BurgersMIM(nn.Module):
             p_n_dgm_layers, p_dgm_activation, p_out_activation, output_dim=input_dims-1)
         self.p_input_layer, self.p_hidden_layers, self.p_dgm_layers, self.p_output_layer = self.p_layers
 
-
     def initial_condition(self, X):
         # Implement the initial condition: u(0, x) = prod(sin(pi * x_i))
         with torch.no_grad():
             initial_condition = torch.prod(
                 torch.sin(torch.pi * X), dim=1, keepdim=True)
         return initial_condition
-    
+
     def forward(self, t, x, nu, alpha):
         """
         x: spatial coordinates (N, d)
@@ -381,7 +401,6 @@ class BurgersMIM(nn.Module):
                 S = layer(p_input, S, S1)
             p_input = S
 
-        p = self.p_output_layer(p_input)        
+        p = self.p_output_layer(p_input)
 
         return u, p
-        
