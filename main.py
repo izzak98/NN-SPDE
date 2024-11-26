@@ -8,13 +8,13 @@ from utils.train_utils import train_dgm_heat, train_mim_heat
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(271198)
 
-def train_heat(input_dims=16):
+def train_heat(input_dims=2):
     input_dims = input_dims
-    epochs = 300
+    epochs = 150
     dgm_params = {
         "input_dims": input_dims,
-        "hidden_dims": [64],
-        "dgm_dims": 32,
+        "hidden_dims": [64, 128],
+        "dgm_dims": 64,
         "n_dgm_layers": 3,
         "hidden_activation": 'relu',
         "output_activation": None,
@@ -27,9 +27,9 @@ def train_heat(input_dims=16):
 
     dgm = HeatDGM(**dgm_params).to(DEVICE)
 
-    data_generator = HeatDataGenerator(input_dims, n_points=500)
+    data_generator = HeatDataGenerator(input_dims, n_points=2000)
 
-    dgm_loss_fn = HeatDGMLoss(9, 3, 0.001)
+    dgm_loss_fn = HeatDGMLoss(1, 1, 0)
 
     dgm_optimizer = torch.optim.Adam(dgm.parameters(), lr=1e-4)
 
@@ -38,7 +38,7 @@ def train_heat(input_dims=16):
         mode='min',
         factor=0.5,      # Reduce LR by half when plateauing
         patience=20,     # Wait 20 epochs before reducing LR
-        min_lr=1e-6,    # Don't reduce LR below this
+        min_lr=1e-10,    # Don't reduce LR below this
     )
 
     dgm_best_loss, dgm_losses, dgm, dgm_stats = train_dgm_heat(
@@ -49,7 +49,7 @@ def train_heat(input_dims=16):
 
     mim_params = {
         "input_dims": input_dims, 
-        "u_hidden_dims": [64, 128, 512], 
+        "u_hidden_dims": [64, 128], 
         "u_activation": 'tanh',
         "u_dgm_dims": 30,
         "u_n_dgm_layers": 2, 
@@ -61,13 +61,13 @@ def train_heat(input_dims=16):
         "p_out_activation": None
     }
     mim_train_params = {
-        "batch_size": 512,
+        "batch_size": 2048,
         "bound_split": [1, 0.0, 0.0],
     }
 
     mim = HeatMIM(**mim_params).to(DEVICE)
 
-    mim_loss_fn = HeatMIMLoss(0.00001)
+    mim_loss_fn = HeatMIMLoss(0)
 
     mim_optimizer = torch.optim.Adam(mim.parameters(), lr=1e-4)
 
@@ -76,7 +76,7 @@ def train_heat(input_dims=16):
         mode='min',
         factor=0.5,      # Reduce LR by half when plateauing
         patience=20,     # Wait 20 epochs before reducing LR
-        min_lr=1e-6,    # Don't reduce LR below this
+        min_lr=1e-10,    # Don't reduce LR below this
     )
 
     mim_best_loss, mim_losses, mim, mim_stats = train_mim_heat(
@@ -122,7 +122,7 @@ def train_burger():
         mode='min',
         factor=0.5,      # Reduce LR by half when plateauing
         patience=20,     # Wait 20 epochs before reducing LR
-        min_lr=1e-6,    # Don't reduce LR below this
+        min_lr=1e-10,    # Don't reduce LR below this
     )
 
     mim_best_loss, mim_losses, mim, mim_stats = train_mim_burger(
