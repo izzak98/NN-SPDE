@@ -1,6 +1,7 @@
 import torch
 from torch.optim import Optimizer
 import numpy as np
+from scipy.stats import entropy
 from tqdm import tqdm
 from typing import Callable, Tuple, NamedTuple, Optional
 
@@ -77,17 +78,25 @@ def check_solution_quality(model, data):
 
 def validate_solution(model, data, loss_fn, verbose=True):
     model.eval()
-    total_loss = 0
     base_data = data[0]
+    residuals = []
+    T = base_data[0]
+    X = base_data[1]
+    W = base_data[2]
     for i in range(0, len(base_data[0]), 1024):
-        t, x, w = base_data[i:i+1024]
+        t = T[i:i+1024]
+        x = X[i:i+1024]
+        w = W[i:i+1024]
         u_pred = model(x, t)
         if isinstance(u_pred, tuple):
             u_pred = u_pred[0]
         loss = loss_fn.raw_residual(u_pred, t, w, x)
-        total_loss += torch.mean(loss**2).item()
-    return total_loss/max(len(base_data)//1024, 1)
-
+        residuals.extend(list(loss.detach().cpu().squeeze(1).numpy()))
+    hist_counts = np.histogram(residuals, bins=1000)[0]
+    hist_probs = hist_counts / np.sum(hist_counts)
+    final_loss = np.mean(np.array(residuals)**2)
+    ent = entropy(hist_probs, base=2)
+    return final_loss
 
 def train_model(
         model: torch.nn.Module,
@@ -116,6 +125,8 @@ def train_model(
     """
     if verbose:
         p_bar = tqdm(range(epochs), desc="Training")
+        n_params = sum(p.numel() for p in model.parameters())
+        tqdm.write(f"Training model with {n_params:.2e} params for {epochs} epochs")
     else:
         p_bar = range(epochs)
 
@@ -130,7 +141,7 @@ def train_model(
     val_losses = []
     data_generator.set_epoch(271198)
     val_data = data_generator(1,0,0, white_noise_seed=271198)
-    value_splitter = epochs//5
+    value_splitter = epochs//30
     for epoch in p_bar:
         model.train()
 
@@ -144,7 +155,7 @@ def train_model(
         optimizer.zero_grad()
 
         # Pass unpacked data to the step function
-        loss = step_fn(model, loss_fn, data, optimizer,
+        loss, components = step_fn(model, loss_fn, data, optimizer,
                        train_params, data_generator.n_points)
 
         if epoch == 0:
@@ -154,7 +165,7 @@ def train_model(
             if verbose:
                 tqdm.write(
                     f"First loss: {first_loss}, 100th loss: {loss}, diff: {loss-first_loss:.2e}, % diff: {diff:.2%}")
-            if np.sign(diff) == 1:
+            if np.sign(diff) == 1 or abs(diff) < 0.5:
                 if verbose:
                     tqdm.write(
                         f"\nPruning due to increasing loss at epoch {epoch}")
@@ -177,7 +188,7 @@ def train_model(
                 tqdm.write(
                     f"\nPruning due to NaN loss at epoch {epoch}")
             return np.inf, [], model, stats
-
+    
         val_losses.append(val_loss)
 
         # Update learning rate if scheduler is provided
@@ -203,6 +214,8 @@ def train_model(
                 # Added LR to progress bar
                 "lr": f"{optimizer.param_groups[0]['lr']:.2e}"
             }
+            for i, val in enumerate(components):
+                postfix[f"l{i}"] = f"{val:.2e}"
             p_bar.set_postfix(postfix)
 
     if best_stats["abs_mean"] - best_stats["mean"] < 1e-3:
@@ -257,7 +270,8 @@ def dgm_heat_step(
         # Calculate losses
         loss_components = loss_fn(
             u_base, u_bound, u_init,
-            base_batch.t, base_batch.w, base_batch.x,
+            base_batch.t, base_batch.w, base_batch.x, 
+            bound_batch.x,
             init_batch.x
         )
 
@@ -280,7 +294,7 @@ def dgm_heat_step(
     # Calculate means
     mean_loss = total_loss / num_batches
 
-    return mean_loss
+    return mean_loss, loss_components
 
 
 def mim_heat_step(
@@ -315,7 +329,7 @@ def mim_heat_step(
             u, p, batch.t, batch.w, batch.x,
         )
 
-        batch_loss = sum(loss_components[1:])
+        batch_loss = sum(loss_components)
         batch_loss.backward()
 
         if train_params.get("clip_grad"):
@@ -330,7 +344,7 @@ def mim_heat_step(
 
     mean_loss = total_loss / num_batches
 
-    return mean_loss
+    return mean_loss, loss_components
 
 
 def train_dgm_heat(

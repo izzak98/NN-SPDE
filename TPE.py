@@ -50,7 +50,7 @@ def dgm_heat_objective(trial, dims, epochs):
     train_params = {}
 
     batch_size = trial.suggest_categorical(
-        "batch_size", [32, 64, 128, 256, 512, 1024, 2048])
+        "batch_size", [512, 1024, 2048])
     train_params["batch_size"] = batch_size
 
     use_clip_grad = trial.suggest_categorical("use_clip_grad", [0, 1])
@@ -85,7 +85,7 @@ def dgm_heat_objective(trial, dims, epochs):
         epochs=epochs,
         train_params=train_params,
         scheduler=scheduler,
-        verbose=False
+        verbose=True
     )
     print(f"Trial {trial.number} stats: {stats}")
     return best_loss
@@ -193,7 +193,7 @@ def mim_heat_objective(trial, dims, epochs):
     train_params = {}
 
     batch_size = trial.suggest_categorical(
-        "batch_size", [32, 64, 128, 256, 512, 1024, 2048])
+        "batch_size", [512, 1024, 2048])
     train_params["batch_size"] = batch_size
 
     use_clip_grad = trial.suggest_categorical("use_clip_grad", [0, 1])
@@ -215,7 +215,7 @@ def mim_heat_objective(trial, dims, epochs):
         epochs=epochs,
         train_params=train_params,
         scheduler=scheduler,
-        verbose=False
+        verbose=True
     )
 
     print(f"Trial {trial.number} stats: {stats}")
@@ -306,7 +306,7 @@ def train_best_mim_model(study, dims, epochs, batch_size):
         epochs=epochs,
         train_params=train_params,
         scheduler=scheduler,
-        verbose=False
+        verbose=True
     )
     
     print(f"Training completed with best loss: {best_loss}")
