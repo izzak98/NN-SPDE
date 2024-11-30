@@ -98,6 +98,7 @@ def validate_solution(model, data, loss_fn, verbose=True):
     ent = entropy(hist_probs, base=2)
     return final_loss
 
+
 def train_model(
         model: torch.nn.Module,
         optimizer: Optimizer,
@@ -140,7 +141,7 @@ def train_model(
     }
     val_losses = []
     data_generator.set_epoch(271198)
-    val_data = data_generator(1,0,0, white_noise_seed=271198)
+    val_data = data_generator(1, 0, 0, white_noise_seed=271198)
     value_splitter = epochs//30
     for epoch in p_bar:
         model.train()
@@ -156,7 +157,7 @@ def train_model(
 
         # Pass unpacked data to the step function
         loss, components = step_fn(model, loss_fn, data, optimizer,
-                       train_params, data_generator.n_points)
+                                   train_params, data_generator.n_points)
 
         if epoch == 0:
             first_loss = loss
@@ -188,7 +189,7 @@ def train_model(
                 tqdm.write(
                     f"\nPruning due to NaN loss at epoch {epoch}")
             return np.inf, [], model, stats
-    
+
         val_losses.append(val_loss)
 
         # Update learning rate if scheduler is provided
@@ -270,7 +271,7 @@ def dgm_heat_step(
         # Calculate losses
         loss_components = loss_fn(
             u_base, u_bound, u_init,
-            base_batch.t, base_batch.w, base_batch.x, 
+            base_batch.t, base_batch.w, base_batch.x,
             bound_batch.x,
             init_batch.x
         )
