@@ -123,7 +123,7 @@ class BrownianSheet:
         dW = self.simulate(points, n_samples)
 
         # Add Itô correction term: (1/2)σ²dt
-        variance = torch.var(dW, dim=0)  # Compute noise variance
+        variance = torch.var(dW)  # Compute noise variance
         ito_correction = 0.5 * variance * dt
 
         # Add correction to the solution
