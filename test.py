@@ -21,32 +21,19 @@ writer = SummaryWriter(log_dir)
 sheet = BrownianSheet(device=DEVICE)
 
 
-def heat_residual_loss_nd(model, t, x, alpha, w, use_stochastic=False):
-    """
-    Compute residual loss for n-dimensional heat equation
-    Args:
-        t: time tensor (batch_size, 1)
-        x: spatial coordinates tensor (batch_size, n_dims)
-        alpha: diffusion coefficient
-        w: noise tensor
-        use_stochastic: whether to include stochastic term
-    """
+def heat_residual_loss_2d(model, t, x, y, alpha, w, use_stochastic=False):
     t.requires_grad = True
     x.requires_grad = True
+    y.requires_grad = True
 
-    u = model(t, x)
-
-    # Compute time derivative
+    u = model(t, x, y)
     u_t = torch.autograd.grad(u, t, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+    u_x = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+    u_xx = torch.autograd.grad(u_x, x, grad_outputs=torch.ones_like(u_x), create_graph=True)[0]
+    u_y = torch.autograd.grad(u, y, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+    u_yy = torch.autograd.grad(u_y, y, grad_outputs=torch.ones_like(u_y), create_graph=True)[0]
 
-    # Compute spatial derivatives for each dimension
-    laplacian_u = torch.zeros_like(u)
-    for dim in range(x.shape[1]):
-        u_i = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u),
-                                  create_graph=True)[0][:, dim:dim+1]
-        u_ii = torch.autograd.grad(u_i, x, grad_outputs=torch.ones_like(
-            u_i), create_graph=True)[0][:, dim:dim+1]
-        laplacian_u += u_ii
+    laplacian_u = u_xx + u_yy
 
     if use_stochastic:
         residual = u_t - alpha * laplacian_u + (u * w)
@@ -55,57 +42,73 @@ def heat_residual_loss_nd(model, t, x, alpha, w, use_stochastic=False):
 
     return torch.mean(residual**2)
 
+# Loss for the initial condition
 
-def initial_condition_loss_nd(model, x, u0_func):
-    """
-    Compute initial condition loss for n-dimensional case
-    Args:
-        x: spatial coordinates tensor (batch_size, n_dims)
-        u0_func: initial condition function that takes x as input
-    """
-    t0 = torch.zeros(x.shape[0], 1, device=x.device)
-    u0_pred = model(t0, x)
-    u0_true = u0_func(x)
+
+def initial_condition_loss_2d(model, x, y, u0_func):
+    t0 = torch.zeros_like(x)
+    u0_pred = model(t0, x, y)
+    u0_true = u0_func(x, y)
     return torch.mean((u0_pred - u0_true)**2)
 
-
-def neumann_boundary_condition_loss_nd(model, t, x, n_dims):
-    """
-    Compute Neumann boundary condition loss for n-dimensional case
-    Args:
-        t: time tensor (batch_size, 1)
-        x: spatial coordinates tensor (batch_size, n_dims)
-        n_dims: number of spatial dimensions
-    """
-    total_loss = 0
-    batch_size = x.shape[0]
-
-    for dim in range(n_dims):
-        # Create boundary points for current dimension
-        x_boundary = x.clone()
-        x_boundary.requires_grad = True
-
-        # Evaluate at both boundaries (0 and 1) for current dimension
-        for boundary_val in [0.0, 1.0]:
-            x_boundary[:, dim] = boundary_val
-            u_boundary = model(t, x_boundary)
-
-            # Compute derivative with respect to current dimension
-            du_dx = torch.autograd.grad(
-                u_boundary, x_boundary,
-                grad_outputs=torch.ones_like(u_boundary),
-                create_graph=True
-            )[0][:, dim:dim+1]
-
-            total_loss += torch.mean(du_dx**2)
-
-    return total_loss
+# Loss for Neumann boundary conditions
 
 
-def compute_losses(model, batch, n_dims, u0_func):
-    t, x = [b.to(DEVICE) for b in batch]
-    loss_initial = initial_condition_loss_nd(model, x, u0_func)
-    loss_boundary = neumann_boundary_condition_loss_nd(model, t, x, n_dims)
+def neumann_boundary_condition_loss_2d(model, t, x_min, x_max, y_min, y_max):
+    # Derivative with respect to x at all boundary points
+    x_min.requires_grad = True
+    x_max.requires_grad = True
+
+    # Evaluate at both y_min and y_max for x boundaries
+    u_x_min_ymin = model(t, x_min, y_min)
+    u_x_min_ymax = model(t, x_min, y_max)
+    u_x_max_ymin = model(t, x_max, y_min)
+    u_x_max_ymax = model(t, x_max, y_max)
+
+    du_dx_min_ymin = torch.autograd.grad(
+        u_x_min_ymin, x_min, grad_outputs=torch.ones_like(u_x_min_ymin), create_graph=True)[0]
+    du_dx_min_ymax = torch.autograd.grad(
+        u_x_min_ymax, x_min, grad_outputs=torch.ones_like(u_x_min_ymax), create_graph=True)[0]
+    du_dx_max_ymin = torch.autograd.grad(
+        u_x_max_ymin, x_max, grad_outputs=torch.ones_like(u_x_max_ymin), create_graph=True)[0]
+    du_dx_max_ymax = torch.autograd.grad(
+        u_x_max_ymax, x_max, grad_outputs=torch.ones_like(u_x_max_ymax), create_graph=True)[0]
+
+    # Derivative with respect to y at all boundary points
+    y_min.requires_grad = True
+    y_max.requires_grad = True
+
+    # Evaluate at both x_min and x_max for y boundaries
+    u_y_min_xmin = model(t, x_min, y_min)
+    u_y_min_xmax = model(t, x_max, y_min)
+    u_y_max_xmin = model(t, x_min, y_max)
+    u_y_max_xmax = model(t, x_max, y_max)
+
+    du_dy_min_xmin = torch.autograd.grad(
+        u_y_min_xmin, y_min, grad_outputs=torch.ones_like(u_y_min_xmin), create_graph=True)[0]
+    du_dy_min_xmax = torch.autograd.grad(
+        u_y_min_xmax, y_min, grad_outputs=torch.ones_like(u_y_min_xmax), create_graph=True)[0]
+    du_dy_max_xmin = torch.autograd.grad(
+        u_y_max_xmin, y_max, grad_outputs=torch.ones_like(u_y_max_xmin), create_graph=True)[0]
+    du_dy_max_xmax = torch.autograd.grad(
+        u_y_max_xmax, y_max, grad_outputs=torch.ones_like(u_y_max_xmax), create_graph=True)[0]
+
+    return (
+        torch.mean(du_dx_min_ymin**2) + torch.mean(du_dx_min_ymax**2) +
+        torch.mean(du_dx_max_ymin**2) + torch.mean(du_dx_max_ymax**2) +
+        torch.mean(du_dy_min_xmin**2) + torch.mean(du_dy_min_xmax**2) +
+        torch.mean(du_dy_max_xmin**2) + torch.mean(du_dy_max_xmax**2)
+    )
+
+
+def compute_losses(model, batch):
+    t, x, y, x_min, x_max, y_min, y_max = [b.to(DEVICE) for b in batch]
+    loss_initial = initial_condition_loss_2d(
+        model, x, y, lambda x, y: torch.cos(torch.pi * x) * torch.cos(torch.pi * y)
+    )
+    loss_boundary = neumann_boundary_condition_loss_2d(
+        model, t, x_min, x_max, y_min, y_max
+    )
 
     return {
         "initial_loss": loss_initial,
@@ -113,14 +116,7 @@ def compute_losses(model, batch, n_dims, u0_func):
     }
 
 
-def generate_batch_data(batch_size, n_dims, device):
-    """Generate batch data for n-dimensional case"""
-    t = torch.rand((batch_size, 1), device=device)
-    x = torch.rand((batch_size, n_dims), device=device)
-    return t, x
-
-
-def train_heat_equation_nd(model, optimizer, alpha, epochs, batch_size, n_dims, u0_func, delta_t, num_samples=5):
+def train_heat_equation_2d_with_neumann(model, optimizer, alpha, epochs, batch_size, delta_t, num_samples=5):
     model = model.to(DEVICE)
     scaler = torch.amp.GradScaler()
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=100, factor=0.5)
@@ -131,24 +127,34 @@ def train_heat_equation_nd(model, optimizer, alpha, epochs, batch_size, n_dims, 
         model.train()
 
         # Generate batch data
-        t, x = generate_batch_data(batch_size, n_dims, DEVICE)
+        t = torch.rand((batch_size, 1), device=DEVICE)
+        x = torch.rand((batch_size, 1), device=DEVICE)
+        y = torch.rand((batch_size, 1), device=DEVICE)
+        x_min = torch.zeros((batch_size, 1), device=DEVICE)
+        x_max = torch.ones((batch_size, 1), device=DEVICE)
+        y_min = torch.zeros((batch_size, 1), device=DEVICE)
+        y_max = torch.ones((batch_size, 1), device=DEVICE)
+
         total_residual_loss = torch.tensor(0, device=DEVICE, dtype=torch.float32)
 
-        # Generate multiple noise samples
-        ws = [sheet.simulate(torch.cat([t, x], dim=1)) for _ in range(num_samples)]
+        ws = [sheet.simulate(torch.cat([t, x, y], dim=1)) for _ in range(num_samples)]
         for i in range(num_samples):
+            # Simulate Brownian sheet increments
             w = ws[i]
-            residual_loss = heat_residual_loss_nd(model, t, x, alpha, w, use_stochastic=True)
+
+            residual_loss = heat_residual_loss_2d(
+                model, t, x, y, alpha, w, use_stochastic=True)
             total_residual_loss += residual_loss
 
         avg_residual_loss = total_residual_loss / num_samples
 
-        batch = (t, x)
-        losses = compute_losses(model, batch, n_dims, u0_func)
+        batch = (t, x, y, x_min, x_max, y_min, y_max)
+        losses = compute_losses(model, batch)
         losses["Avg. Residual Loss"] = avg_residual_loss
         losses["total_loss"] = avg_residual_loss + losses["initial_loss"] + losses["boundary_loss"]
 
-        loss = losses["total_loss"]
+        # Combine the average residual loss with other losses
+        loss = avg_residual_loss + losses["initial_loss"] + losses["boundary_loss"]
 
         # Optimization step
         optimizer.zero_grad()
@@ -177,16 +183,11 @@ if __name__ == "__main__":
     T = 1.0
     alpha = 0.1
     delta_t = 0.01
-    n_dims = 3  # Change this to the desired number of dimensions
     torch.autograd.set_detect_anomaly(True)
-
-    # Define n-dimensional initial condition
-    def u0_func(x):
-        return torch.cos(torch.pi * x).prod(dim=1, keepdim=True)
 
     # Initialize model and optimizer
     model = DGM(
-        input_dims=n_dims,  # Updated to handle n dimensions
+        input_dims=2,
         hidden_dims=[128, 128, 64],
         dgm_dims=0,
         n_dgm_layers=3,
@@ -197,14 +198,12 @@ if __name__ == "__main__":
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
 
     # Train the model
-    train_heat_equation_nd(
+    train_heat_equation_2d_with_neumann(
         model,
         optimizer,
         alpha=alpha,
         epochs=1000,
         batch_size=2048,
-        n_dims=n_dims,
-        u0_func=u0_func,
         delta_t=delta_t,
     )
 
