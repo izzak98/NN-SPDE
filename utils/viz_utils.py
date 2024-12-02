@@ -53,9 +53,10 @@ def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], n
         }
 
         # Plot the solution
-        im = ax.imshow(solution, extent=(0, 1, 0, 1), origin="lower", cmap="hot", vmin=-1, vmax=1)
+        im = ax.imshow(solution, extent=(0, 1, 0, 1), origin="lower", cmap="hot", vmin=-1 *
+                       np.sqrt(2) * np.log10(np.exp(2)), vmax=1*np.sqrt(2) * np.log10(np.exp(2)))
         ax.set_title(
-            f"t = {t:.2f}\nMean: {stats[t]['mean']:.2e}\nDiagonal Abs diff: {stats[t]['diagonal_diff']:.2e}\nCorner Abs diff: {stats[t]['corner_diff']:.2e}")
+            f"t = {t:.2f}\nMean: {stats[t]['mean']:.2e}\n[0.01, 0.99] - [0.99, 0.01]: {stats[t]['diagonal_diff']:.2e}\n[0.99, 0.99] [0.01, 0.01]: {stats[t]['corner_diff']:.2e}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
 
@@ -70,8 +71,8 @@ def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], n
     for t in time_steps:
         summary += f"Time t={t:.2f}:\n"
         summary += f"  Mean: {stats[t]['mean']:.2e}\n"
-        summary += f"  Diagonal Abs diff: {stats[t]['diagonal_diff']:.2e}\n"
-        summary += f"  Corner Abs diff: {stats[t]['corner_diff']:.2e}\n"
+        summary += f"  [0.01, 0.99] - [0.99, 0.01]: {stats[t]['diagonal_diff']:.2e}\n"
+        summary += f"  [0.99, 0.99] - [0.01, 0.01]: {stats[t]['corner_diff']:.2e}\n"
         summary += f"  Min: {stats[t]['min']:.2e}\n"
         summary += f"  Max: {stats[t]['max']:.2e}\n"
         summary += f"  Std: {stats[t]['std']:.2e}\n"
@@ -87,7 +88,7 @@ if __name__ == "__main__":
     def analytical_solution(t, x, y):
         t = t[0]
         # x, y = x[:, 0], x[:, 1]
-        return torch.cos(np.pi*x)*torch.cos(np.pi*y)*torch.exp(-(np.pi**2)*t*0.01)
+        return torch.cos(np.pi*x)*torch.cos(np.pi*y)*torch.exp(-(np.pi**2)*t*0.1)
 
     gen_heat_snapshots(analytical_solution, grid_size=100, time_steps=[
                        0.1, 0.25, 0.5, 0.9], name="Analytical Solution")
