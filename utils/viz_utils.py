@@ -37,10 +37,20 @@ def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], n
 
         # Check for symmetries
         temp_t = torch.tensor([[t]]).float().to(DEVICE)
-        diagonal_symmetry = abs(model(temp_t, torch.tensor([[0.99]]).to(DEVICE), torch.tensor([[0.01]]).to(DEVICE)) -
-                                model(temp_t, torch.tensor([[0.01]]).to(DEVICE), torch.tensor([[0.99]]).to(DEVICE))).item()
-        corner_asymmetry = abs(model(temp_t, torch.tensor([[0.01]]).to(DEVICE), torch.tensor([[0.01]]).to(DEVICE)) -
-                               model(temp_t, torch.tensor([[0.99]]).to(DEVICE), torch.tensor([[0.99]]).to(DEVICE))).item()
+        c1 = model(temp_t, torch.tensor([[0.99]]).to(DEVICE), torch.tensor([[0.01]]).to(DEVICE))
+        c2 = model(temp_t, torch.tensor([[0.01]]).to(DEVICE), torch.tensor([[0.99]]).to(DEVICE))
+
+        c3 = model(temp_t, torch.tensor([[0.99]]).to(DEVICE), torch.tensor([[0.99]]).to(DEVICE))
+        c4 = model(temp_t, torch.tensor([[0.01]]).to(DEVICE), torch.tensor([[0.01]]).to(DEVICE))
+
+        if isinstance(c1, tuple):
+            c1 = c1[0]
+            c2 = c2[0]
+            c3 = c3[0]
+            c4 = c4[0]
+
+        diagonal_symmetry = abs(c1 - c2).item()
+        corner_asymmetry = abs(c3 - c4).item()
 
         # Store statistics
         stats[t] = {
