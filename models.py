@@ -2,10 +2,10 @@ from typing import Any, Callable
 import torch
 from torch import nn
 import numpy as np
-from utils.model_utils import create_fc_layers
+from utils.model_utils import create_fc_layers, MIM, create_x_circ
 
 
-class DGM(nn.Module):
+class HeatDGM(nn.Module):
     def __init__(self,
                  input_dims: int,
                  hidden_dims: list,
@@ -13,7 +13,7 @@ class DGM(nn.Module):
                  n_dgm_layers: int,
                  hidden_activation: str,
                  output_activation: str):
-        super(DGM, self).__init__()
+        super(HeatDGM, self).__init__()
         input_dims += 2  # Add time and nu dimensions
         self.input_dims = input_dims
         self.hidden_dims = hidden_dims
@@ -21,7 +21,7 @@ class DGM(nn.Module):
         self.n_dgm_layers = n_dgm_layers
         self.hidden_activation = hidden_activation
         self.output_activation = output_activation
-        self.name = "DGM"
+        self.name = "Heat DGM"
 
         layers = create_fc_layers(
             input_dims, hidden_dims, hidden_activation, dgm_dims,
@@ -50,7 +50,52 @@ class DGM(nn.Module):
         return self.output_layer(input_x)
 
 
-class HeatMIM(nn.Module):
+class BurgerDGM(nn.Module):
+    def __init__(self,
+                 input_dims: int,
+                 hidden_dims: list,
+                 dgm_dims: int,
+                 n_dgm_layers: int,
+                 hidden_activation: str,
+                 output_activation: str):
+        super(BurgerDGM, self).__init__()
+        input_dims += 3  # Add time and nu dimensions
+        self.input_dims = input_dims
+        self.hidden_dims = hidden_dims
+        self.dgm_dims = dgm_dims
+        self.n_dgm_layers = n_dgm_layers
+        self.hidden_activation = hidden_activation
+        self.output_activation = output_activation
+        self.name = "Heat DGM"
+
+        layers = create_fc_layers(
+            input_dims, hidden_dims, hidden_activation, dgm_dims,
+            n_dgm_layers, output_activation)
+        self.input_layer, self.hidden_layers, self.dgm_layers, self.output_layer = layers
+
+    def forward(self, t, nu, alpha, *args):  # -> Any:
+        # shapes:
+        # t: (batch_size, 1)
+        # x: (batch_size, dims)
+        x = torch.cat(args, dim=1)
+        inps = torch.cat([t, nu, alpha, x], dim=1)
+        input_x = self.input_layer(inps)
+
+        if self.hidden_layers:
+            for layer in self.hidden_layers:
+                input_x = layer(input_x)
+
+        if self.dgm_layers:
+            S1 = input_x
+            S = input_x
+            for layer in self.dgm_layers:
+                S = layer(input_x, S, S1)
+            input_x = S
+
+        return self.output_layer(input_x)
+
+
+class HeatMIM(MIM):
     def __init__(self,
                  input_dims: int,
                  hidden_dims: list,
@@ -59,27 +104,10 @@ class HeatMIM(nn.Module):
                  hidden_activation: str,
                  output_activation: str,
                  initial_conditions: Callable):
-        super(HeatMIM, self).__init__()
-        input_dims += 2  # Add time and nu dimensions
-        self.input_dims = input_dims
-        self.hidden_dims = hidden_dims
-        self.dgm_dims = dgm_dims
-        self.n_dgm_layers = n_dgm_layers
-        self.hidden_activation = hidden_activation
-        self.output_activation = output_activation
-        self.initial_conditions = initial_conditions
-        self.name = "MIM"
-
-        # Create network layers
-        u_layers = create_fc_layers(
-            input_dims, hidden_dims, hidden_activation, dgm_dims,
-            n_dgm_layers, output_activation, output_dim=1)
-        self.u_input_layer, self.u_hidden_layers, self.u_dgm_layers, self.u_output_layer = u_layers
-
-        p_layers = create_fc_layers(
-            input_dims, hidden_dims, hidden_activation, dgm_dims,
-            n_dgm_layers, output_activation, output_dim=input_dims-2)
-        self.p_input_layer, self.p_hidden_layers, self.p_dgm_layers, self.p_output_layer = p_layers
+        super(HeatMIM, self).__init__(
+            input_dims, hidden_dims, dgm_dims, n_dgm_layers,
+            hidden_activation, output_activation, initial_conditions)
+        self.name = "HeatMIM"
 
     def enforce_neumann_boundary(self, p_theta: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """
