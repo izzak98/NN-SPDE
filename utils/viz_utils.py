@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], name=None) -> Tuple[plt.Figure, Dict]:
+def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], name=None, add_values=None) -> Tuple[plt.Figure, Dict]:
     if name is None:
         name = model.__name__
 
@@ -28,21 +28,38 @@ def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], n
     # Create subplots for the snapshots in a grid layout
     fig, axes = plt.subplots(1, len(time_steps), figsize=(20, 10), constrained_layout=True)
 
+    if add_values:
+        tensor_values = []
+        for value in add_values:
+            tensor_value = torch.repeat_interleave(torch.tensor(
+                [[value]]).to(DEVICE), grid_tensor.shape[0], dim=0)
+            tensor_values.append(tensor_value)
+
+    else:
+        tensor_values = []
+
     for i, (ax, time_tensor, t) in enumerate(zip(axes, time_tensors, time_steps)):
         with torch.no_grad():
-            output = model(time_tensor, grid_tensor[:, 0:1], grid_tensor[:, 1:2])
+            output = model(time_tensor, *tensor_values, grid_tensor[:, 0:1], grid_tensor[:, 1:2])
             if isinstance(output, tuple):
                 output = output[0]
         solution = output.cpu().numpy().reshape(grid_size, grid_size)
 
         # Check for symmetries
         temp_t = torch.tensor([[t]]).float().to(DEVICE)
-        c1 = model(temp_t, torch.tensor([[0.99]]).to(DEVICE), torch.tensor([[0.01]]).to(DEVICE))
-        c2 = model(temp_t, torch.tensor([[0.01]]).to(DEVICE), torch.tensor([[0.99]]).to(DEVICE))
+        if add_values is not None:
+            temp_add_values = [torch.tensor([[value]]).to(DEVICE) for value in add_values]
+        else:
+            temp_add_values = []
+        c1 = model(temp_t, *temp_add_values,
+                   torch.tensor([[0.99]]).to(DEVICE), torch.tensor([[0.01]]).to(DEVICE))
+        c2 = model(temp_t, *temp_add_values,
+                   torch.tensor([[0.01]]).to(DEVICE), torch.tensor([[0.99]]).to(DEVICE))
 
-        c3 = model(temp_t, torch.tensor([[0.99]]).to(DEVICE), torch.tensor([[0.99]]).to(DEVICE))
-        c4 = model(temp_t, torch.tensor([[0.01]]).to(DEVICE), torch.tensor([[0.01]]).to(DEVICE))
-
+        c3 = model(temp_t, *temp_add_values,
+                   torch.tensor([[0.99]]).to(DEVICE), torch.tensor([[0.99]]).to(DEVICE))
+        c4 = model(temp_t, *temp_add_values,
+                   torch.tensor([[0.01]]).to(DEVICE), torch.tensor([[0.01]]).to(DEVICE))
         if isinstance(c1, tuple):
             c1 = c1[0]
             c2 = c2[0]
@@ -69,12 +86,11 @@ def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], n
             f"t = {t:.2f}\nMean: {stats[t]['mean']:.2e}\n[0.01, 0.99] - [0.99, 0.01]: {stats[t]['diagonal_diff']:.2e}\n[0.99, 0.99] [0.01, 0.01]: {stats[t]['corner_diff']:.2e}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
-
     # Add a single shared color bar for all subplots
     cbar = fig.colorbar(im, ax=axes, location='right', shrink=0.75, label="Temperature")
 
     plt.savefig(f"{name}_heat_snapshots.png")
-    plt.suptitle("Stochastic Heat Equation Snapshots", fontsize=16)
+    plt.suptitle(f"{name} Heat Equation Snapshots", fontsize=16)
 
     # Generate summary string
     summary = "Heat Equation Solution Statistics:\n\n"
