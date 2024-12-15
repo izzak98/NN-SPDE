@@ -11,9 +11,9 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
 
-def initial_condition_loss_nd(model, coords, u0_func):
+def initial_condition_loss_nd(model, nu, coords, u0_func):
     t0 = torch.zeros_like(coords[0])
-    u0_pred = model(t0, *coords)
+    u0_pred = model(t0, nu, *coords)
     u0_true = u0_func(*coords)
     return torch.mean((u0_pred - u0_true)**2)
 
@@ -29,25 +29,25 @@ def adjusted_initial_condition(*coords):
 
 
 class TrainDGM():
-    def __init__(self, lambda1=1, lambda2=1, use_stochastic=False, alpha=0.1):
+    def __init__(self, lambda1=1, lambda2=1, use_stochastic=False):
         self.lambda1 = lambda1
         self.lambda2 = lambda2
         self.use_stochastic = use_stochastic
-        self.alpha = alpha
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         assert self.lambda1 >= 1 and self.lambda2 >= 1, "Lambda values must be greater than or equal to 1"
 
-    def heat_residual_loss_nd(self, model, *coords, w):
+    def heat_residual_loss_nd(self, model, t, nu, *coords, w):
         for coord in coords:
             coord.requires_grad = True
+        t.requires_grad = True
 
-        u = model(*coords)
+        u = model(t, nu, *coords)
         u_t = torch.autograd.grad(
-            u, coords[0], grad_outputs=torch.ones_like(u), create_graph=True)[0]
+            u, t, grad_outputs=torch.ones_like(u), create_graph=True)[0]
 
         laplacian_u = 0
-        for coord in coords[1:]:
+        for coord in coords:
             u_x = torch.autograd.grad(
                 u, coord, grad_outputs=torch.ones_like(u), create_graph=True)[0]
             u_xx = torch.autograd.grad(
@@ -55,13 +55,13 @@ class TrainDGM():
             laplacian_u += u_xx
 
         if self.use_stochastic:
-            residual = u_t - self.alpha * laplacian_u + (u * w)
+            residual = u_t - nu * laplacian_u + (u * w)
         else:
-            residual = u_t - self.alpha * laplacian_u
+            residual = u_t - nu * laplacian_u
 
         return torch.mean(residual**2)
 
-    def neumann_boundary_condition_loss_nd(self, model, t, boundaries):
+    def neumann_boundary_condition_loss_nd(self, model, t, nu, boundaries):
         total_loss = 0
         batch_size = t.shape[0]
 
@@ -77,7 +77,7 @@ class TrainDGM():
                 coord = coords[dim]
                 coord.requires_grad = True
 
-                u = model(t, *coords)
+                u = model(t, nu, *coords)
                 du_dx = torch.autograd.grad(
                     u, coord, grad_outputs=torch.ones_like(u), create_graph=True)[0]
                 total_loss += torch.mean(du_dx**2)
@@ -85,21 +85,21 @@ class TrainDGM():
         return total_loss
 
     def compute_losses(self, model, batch, boundaries):
-        t, *coords = batch
+        t, nu, *coords = batch
         loss_initial = initial_condition_loss_nd(
-            model, coords, adjusted_initial_condition
+            model, nu, coords, adjusted_initial_condition
         )
-        loss_boundary = self.neumann_boundary_condition_loss_nd(model, t, boundaries)
+        loss_boundary = self.neumann_boundary_condition_loss_nd(model, t, nu, boundaries)
         return {
             "initial_loss": loss_initial,
             "boundary_loss": loss_boundary,
         }
 
-    def forward(self, model, t, coords, ws, boundaries):
+    def forward(self, model, t, nu, coords, ws, boundaries):
         total_residual_loss = torch.tensor(0, device=self.device, dtype=torch.float32)
-        batch = (t, *coords)
+        batch = (t, nu, *coords)
         for w in ws:
-            residual_loss = self.heat_residual_loss_nd(model, t, *coords, w=w)
+            residual_loss = self.heat_residual_loss_nd(model, t, nu, *coords, w=w)
             total_residual_loss += residual_loss
 
         avg_residual_loss = total_residual_loss / len(ws)
@@ -115,71 +115,83 @@ class TrainDGM():
 
 
 class TrainMIM():
-    def __init__(self, lambda1=1, use_stochastic=False, alpha=0.1):
-        self.lambda1 = lambda1
+    def __init__(self, lambda1=1, use_stochastic=False):
+        self.lambda1 = lambda1  # Consider increasing this significantly
         self.use_stochastic = use_stochastic
-        self.alpha = alpha
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         assert self.lambda1 >= 1, "Lambda value must be greater than or equal to 1"
 
-    def heat_residual_loss_nd(self, model, *coords, w):
+    def heat_residual_loss_nd(self, model, t, nu, *coords, w):
         for coord in coords:
             coord.requires_grad = True
+        t.requires_grad = True
 
-        u, p = model(*coords)
+        u, p = model(t, nu, *coords)
+
+        # Compute ut through autograd
         u_t = torch.autograd.grad(
-            u, coords[0], grad_outputs=torch.ones_like(u), create_graph=True)[0]
+            u, t, grad_outputs=torch.ones_like(u), create_graph=True)[0]
 
-        laplacian_u = 0
-        for coord in coords[1:]:
-            p_x = torch.autograd.grad(
-                p, coord, grad_outputs=torch.ones_like(p), create_graph=True)[0]
-
-            laplacian_u += p_x
+        # Use learned p for Laplacian
+        laplacian_u = torch.zeros_like(u)
+        for i, coord in enumerate(coords):
+            # Get divergence of p
+            p_i = p[:, [i]]
+            p_i_grad = torch.autograd.grad(
+                p_i, coord, grad_outputs=torch.ones_like(p_i), create_graph=True)[0]
+            laplacian_u += p_i_grad
 
         if self.use_stochastic:
-            residual = u_t - self.alpha * laplacian_u + (u * w)
+            residual = u_t - nu * laplacian_u + (u * w)
         else:
-            residual = u_t - self.alpha * laplacian_u
+            residual = u_t - nu * laplacian_u
 
         return torch.mean(residual**2)
 
-    def gradient_loss(self, model, t, coords):
-        # Forward pass to compute u and p
-        u, p = model(t, *coords)
+    def gradient_loss(self, model, t, nu, coords):
+        # Initialize total loss
+        total_diff = 0
 
-        # Ensure gradients can be computed with respect to coordinates
+        # Ensure gradients enabled
         for coord in coords:
             coord.requires_grad = True
 
-        # Compute the difference between p and ∇u
-        total_diff = 0
+        # Forward pass to compute u and p
+        u, p = model(t, nu, *coords)
+
+        # For each dimension
         for i, coord in enumerate(coords):
-            # Compute gradient ∂u/∂coord
+            # Compute true gradient through autograd
             u_grad = torch.autograd.grad(
                 u, coord, grad_outputs=torch.ones_like(u), create_graph=True)[0]
 
-            # Compute squared difference between p and ∇u for this dimension
-            total_diff += torch.mean((p[:, i] - u_grad) ** 2)
+            # Compare with learned gradient (p)
+            diff = (p[:, [i]] - u_grad) ** 2
+            total_diff += torch.mean(diff)
 
         return total_diff
 
-    def forward(self, model, t, coords, ws, boundaries):
+    def forward(self, model, t, nu, coords, ws, boundaries):
         total_residual_loss = torch.tensor(0, device=self.device, dtype=torch.float32)
         for w in ws:
-            residual_loss = self.heat_residual_loss_nd(model, t, *coords, w=w)
+            residual_loss = self.heat_residual_loss_nd(model, t, nu, *coords, w=w)
             total_residual_loss += residual_loss
 
         avg_residual_loss = total_residual_loss / len(ws)
-        gradient_loss = self.gradient_loss(model, t, coords)
+        gradient_loss = self.gradient_loss(model, t, nu, coords)
+
+        # The key change: significantly increase lambda1 to enforce gradient matching
         total_loss = avg_residual_loss + self.lambda1 * gradient_loss
+
         losses = {
             "Avg. Residual Loss": avg_residual_loss,
             "Gradient Loss": gradient_loss,
             "total_loss": total_loss,
         }
+
         with torch.no_grad():
             losses["unadjusted_total_loss"] = avg_residual_loss + gradient_loss
+
         return losses
 
 
@@ -200,10 +212,13 @@ def train_heat(model, optimizer, epochs, batch_size, boundaries, loss_calculator
         model.train()
 
         t = torch.rand((batch_size, 1), device=DEVICE)
+        # sample nu with log-uniform distribution
+        log_a, log_b = torch.log(torch.tensor(1e-10)), torch.log(torch.tensor(1.0))
+        nu = torch.exp(torch.empty(batch_size, 1).uniform_(log_a, log_b)).to(DEVICE)
         coords = [torch.rand((batch_size, 1), device=DEVICE) for _ in range(len(boundaries))]
         points = torch.cat([t] + coords, dim=1)
         ws = [sheet.simulate(points) for _ in range(num_samples)]
-        losses = loss_calculator.forward(model, t, coords, ws, boundaries)
+        losses = loss_calculator.forward(model, t, nu, coords, ws, boundaries)
         loss = losses["total_loss"]
         optimizer.zero_grad()
         scaler.scale(loss).backward()

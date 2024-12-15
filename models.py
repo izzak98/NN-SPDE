@@ -1,7 +1,7 @@
 from typing import Any, Callable
 import torch
 from torch import nn
-
+import numpy as np
 from utils.model_utils import create_fc_layers
 
 
@@ -14,7 +14,7 @@ class DGM(nn.Module):
                  hidden_activation: str,
                  output_activation: str):
         super(DGM, self).__init__()
-        input_dims += 1
+        input_dims += 2  # Add time and nu dimensions
         self.input_dims = input_dims
         self.hidden_dims = hidden_dims
         self.dgm_dims = dgm_dims
@@ -28,12 +28,12 @@ class DGM(nn.Module):
             n_dgm_layers, output_activation)
         self.input_layer, self.hidden_layers, self.dgm_layers, self.output_layer = layers
 
-    def forward(self, t, *args):  # -> Any:
+    def forward(self, t, nu, *args):  # -> Any:
         # shapes:
         # t: (batch_size, 1)
         # x: (batch_size, dims)
         x = torch.cat(args, dim=1)
-        inps = torch.cat([t, x], dim=1)
+        inps = torch.cat([t, nu, x], dim=1)
         input_x = self.input_layer(inps)
 
         if self.hidden_layers:
@@ -60,7 +60,7 @@ class HeatMIM(nn.Module):
                  output_activation: str,
                  initial_conditions: Callable):
         super(HeatMIM, self).__init__()
-        input_dims += 1  # Add time dimension
+        input_dims += 2  # Add time and nu dimensions
         self.input_dims = input_dims
         self.hidden_dims = hidden_dims
         self.dgm_dims = dgm_dims
@@ -78,22 +78,24 @@ class HeatMIM(nn.Module):
 
         p_layers = create_fc_layers(
             input_dims, hidden_dims, hidden_activation, dgm_dims,
-            n_dgm_layers, output_activation, output_dim=input_dims-1)
+            n_dgm_layers, output_activation, output_dim=input_dims-2)
         self.p_input_layer, self.p_hidden_layers, self.p_dgm_layers, self.p_output_layer = p_layers
 
     def enforce_neumann_boundary(self, p_theta: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """
-        Enforce zero Neumann boundary conditions on the unit hypercube
+        Enforce zero Neumann boundary conditions by making derivatives zero at boundaries
         Args:
             p_theta: Network output for derivatives (batch_size, dims)
             x: Spatial coordinates (batch_size, dims)
         """
-        return x * (1-x) * p_theta
+        # Create boundary mask that smoothly goes to zero at boundaries
+        boundary_mask = torch.prod(x * (1-x), dim=1, keepdim=True)
+        return boundary_mask * p_theta
 
-    def forward(self, t, *args):
+    def forward(self, t, nu, *args):
         # Combine inputs
         x = torch.cat(args, dim=1)
-        inps = torch.cat([t, x], dim=1)
+        inps = torch.cat([t, nu, x], dim=1)
 
         # Compute u
         u_base = self.u_input_layer(inps)
@@ -122,7 +124,8 @@ class HeatMIM(nn.Module):
         p_base = self.p_output_layer(p_base)
 
         # Apply conditions
-        u = t * u_base + self.initial_conditions(*args)
+        dims = self.input_dims - 2
+        u = t * u_base + self.initial_conditions(*args) * np.sqrt(dims) * np.log10(np.exp(dims))
         p = self.enforce_neumann_boundary(p_base, x)
 
         return u, p
