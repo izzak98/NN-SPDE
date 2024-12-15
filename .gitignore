@@ -1,3 +1,9 @@
 figures/*
 model/*
 *.pyc
+runs/*
+*.gif
+*.png
+*.pt
+*.db
+.vscode/*

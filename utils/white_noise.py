@@ -16,27 +16,17 @@ class BrownianSheet:
 
     @staticmethod
     @torch.jit.script
-    def _compute_covariance_batch_fast(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+    def _compute_covariance_batch_scaled(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
         """
-        Ultra-fast vectorized covariance computation using cumulative products
-        Args:
-            x1: tensor of shape (batch_size1, n_dims)
-            x2: tensor of shape (batch_size2, n_dims)
-        Returns:
-            Covariance tensor of shape (batch_size1, batch_size2)
+        Compute covariance with scaling to prevent variance shrinkage in high dimensions.
         """
         n_dims = x1.size(1)
         x1 = x1.unsqueeze(1)  # (batch1, 1, dims)
         x2 = x2.unsqueeze(0)  # (1, batch2, dims)
 
-        # Scale coordinates to prevent numerical issues in high dimensions
-        scale_factor = torch.exp(torch.log(torch.tensor(0.5, device=x1.device)) / n_dims)
-        x1 = x1 * scale_factor
-        x2 = x2 * scale_factor
-
         mins = torch.minimum(x1, x2)  # (batch1, batch2, dims)
         log_mins = torch.log(mins + 1e-10)
-        log_prod = log_mins.sum(dim=2)
+        log_prod = log_mins.sum(dim=2) / n_dims  # Scale by 1/n_dims
         return torch.exp(log_prod)
 
     @staticmethod
@@ -84,7 +74,7 @@ class BrownianSheet:
             chunk_points = points[i:end_idx]
 
             # Compute covariance matrix efficiently
-            cov = self._compute_covariance_batch_fast(chunk_points, chunk_points)
+            cov = self._compute_covariance_batch_scaled(chunk_points, chunk_points)
 
             # Numerical stability with efficient indexing
             diag_indices = torch.arange(cov.shape[0], device=cov.device)
@@ -108,40 +98,25 @@ class BrownianSheet:
 
             # Scale based on dimension to maintain variance
             dim_scale = torch.sqrt(torch.tensor(n_dims, device=chunk_result.device))
-            chunk_result.mul_(dim_scale)
+            # chunk_result.mul_(dim_scale)
 
             # Store in pre-allocated tensor
             result[:, i:end_idx] = chunk_result
 
         return result
 
-    def simulate_with_ito(self, points: torch.Tensor, n_samples: int = 1, dt: float = 0.001) -> torch.Tensor:
-        """
-        Simulate with Itô correction
-        """
-        # Original Brownian sheet simulation
-        dW = self.simulate(points, n_samples)
-
-        # Add Itô correction term: (1/2)σ²dt
-        variance = torch.var(dW, dim=0)  # Compute noise variance
-        ito_correction = 0.5 * variance * dt
-
-        # Add correction to the solution
-        corrected = dW + ito_correction
-        return corrected
-
     @staticmethod
     def theoretical_variance(points: torch.Tensor) -> torch.Tensor:
         """
         Compute theoretical variance at each point
         """
-        return points.prod(dim=1)
+        return points.prod(dim=1)**(1 / points.size(1))
 
     def validate_scaling(self, points: torch.Tensor, n_samples: int = 100) -> dict:
         """
         Validate the scaling properties of the simulation
         """
-        simulated = self.simulate_with_ito(points, n_samples)
+        simulated = self.simulate(points, n_samples)
         empirical_var = simulated.var(dim=0)
         theoretical_var = self.theoretical_variance(points)
 
