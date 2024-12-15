@@ -6,7 +6,14 @@ from typing import Dict, List, Tuple
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], name=None, add_values=None) -> Tuple[plt.Figure, Dict]:
+def gen_heat_snapshots(model,
+                       grid_size=100,
+                       time_steps=[0.1, 0.25, 0.5, 0.9],
+                       name=None,
+                       add_values=None,
+                       color_map="hot",
+                       min_max=(-1, 1)
+                       ) -> Tuple[plt.Figure, Dict]:
     if name is None:
         name = model.__name__
 
@@ -80,14 +87,14 @@ def gen_heat_snapshots(model, grid_size=100, time_steps=[0.1, 0.25, 0.5, 0.9], n
         }
 
         # Plot the solution
-        im = ax.imshow(solution, extent=(0, 1, 0, 1), origin="lower", cmap="hot", vmin=-1 *
-                       np.sqrt(2) * np.log10(np.exp(2)), vmax=1*np.sqrt(2) * np.log10(np.exp(2)))
+        im = ax.imshow(solution, extent=(0, 1, 0, 1), origin="lower",
+                       cmap=color_map, vmin=min_max[0], vmax=min_max[1])
         ax.set_title(
             f"t = {t:.2f}\nMean: {stats[t]['mean']:.2e}\n[0.01, 0.99] - [0.99, 0.01]: {stats[t]['diagonal_diff']:.2e}\n[0.99, 0.99] [0.01, 0.01]: {stats[t]['corner_diff']:.2e}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
     # Add a single shared color bar for all subplots
-    cbar = fig.colorbar(im, ax=axes, location='right', shrink=0.75, label="Temperature")
+    cbar = fig.colorbar(im, ax=axes, location='right', shrink=0.75, label="Values of U")
 
     plt.savefig(f"{name}_heat_snapshots.png")
     plt.suptitle(f"{name} Heat Equation Snapshots", fontsize=16)
@@ -117,4 +124,4 @@ if __name__ == "__main__":
         return torch.cos(np.pi*x)*torch.cos(np.pi*y)*torch.exp(-(np.pi**2)*t*0.1)
 
     gen_heat_snapshots(analytical_solution, grid_size=100, time_steps=[
-                       0.1, 0.25, 0.5, 0.9], name="Analytical Solution")
+                       0.1, 0.25, 0.5, 0.9], name="Analytical Solution", color_map="viridis")
