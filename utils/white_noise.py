@@ -105,21 +105,6 @@ class BrownianSheet:
 
         return result
 
-    def simulate_with_ito(self, points: torch.Tensor, n_samples: int = 1, dt: float = 0.001) -> torch.Tensor:
-        """
-        Simulate with Itô correction
-        """
-        # Original Brownian sheet simulation
-        dW = self.simulate(points, n_samples)
-
-        # Add Itô correction term: (1/2)σ²dt
-        variance = torch.var(dW)  # Compute noise variance
-        ito_correction = 0.5 * variance * dt
-
-        # Add correction to the solution
-        corrected = dW + ito_correction
-        return corrected
-
     @staticmethod
     def theoretical_variance(points: torch.Tensor) -> torch.Tensor:
         """
