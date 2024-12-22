@@ -35,8 +35,8 @@ class DGM(nn.Module):
         # shapes:
         # t: (batch_size, 1)
         # x: (batch_size, dims)
-        add_args = args[self.add_dims-1:]
-        x = torch.cat(args[:self.spatial_dims], dim=1)
+        add_args = args[:-self.spatial_dims]
+        x = torch.cat(args[-self.spatial_dims:], dim=1)
         inps = torch.cat([t, *add_args, x], dim=1)
         input_x = self.input_layer(inps)
 
@@ -139,6 +139,60 @@ class BurgerMIM(MIM):
         x = torch.cat(args, dim=1)
         x_circ = create_x_circ(x)
         inps = torch.cat([t, nu, alpha, x_circ], dim=1)
+
+        # Compute u
+        u_base = self.u_input_layer(inps)
+        if self.u_hidden_layers:
+            for layer in self.u_hidden_layers:
+                u_base = layer(u_base)
+        if self.u_dgm_layers:
+            S1 = u_base
+            S = u_base
+            for layer in self.u_dgm_layers:
+                S = layer(u_base, S, S1)
+            u_base = S
+        u_base = self.u_output_layer(u_base)
+
+        # Compute p
+        p_base = self.p_input_layer(inps)
+        if self.p_hidden_layers:
+            for layer in self.p_hidden_layers:
+                p_base = layer(p_base)
+        if self.p_dgm_layers:
+            S1 = p_base
+            S = p_base
+            for layer in self.p_dgm_layers:
+                S = layer(p_base, S, S1)
+            p_base = S
+        p = self.p_output_layer(p_base)
+
+        # Apply conditions
+        u = t * u_base + self.initial_conditions(*args)
+
+        return u, p
+
+
+class KPZMIM(MIM):
+    def __init__(self,
+                 spatial_dims: int,
+                 add_dims: int,
+                 hidden_dims: list,
+                 dgm_dims: int,
+                 n_dgm_layers: int,
+                 hidden_activation: str,
+                 output_activation: str,
+                 initial_conditions: Callable):
+        super(KPZMIM, self).__init__(
+            spatial_dims*8, add_dims, hidden_dims, dgm_dims, n_dgm_layers,
+            hidden_activation, output_activation, initial_conditions)
+
+        self.name = "KPZMIM"
+
+    def forward(self, t, nu, alpha, lambda_kpz, *args):
+        # Combine inputs
+        x = torch.cat(args, dim=1)
+        x_circ = create_x_circ(x)
+        inps = torch.cat([t, nu, alpha, lambda_kpz, x_circ], dim=1)
 
         # Compute u
         u_base = self.u_input_layer(inps)
