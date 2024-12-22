@@ -110,15 +110,19 @@ class DGMLayer(nn.Module):
 
 class MIM(nn.Module):
     def __init__(self,
-                 input_dims: int,
+                 spatial_dims: int,
+                 add_dims: int,
                  hidden_dims: list,
                  dgm_dims: int,
                  n_dgm_layers: int,
                  hidden_activation: str,
                  output_activation: str,
-                 initial_conditions: Callable):
+                 initial_conditions: Callable
+                 ):
         super(MIM, self).__init__()
-        input_dims += 2  # Add time and nu dimensions
+        self.spatial_dims = spatial_dims
+        self.add_dims = add_dims
+        input_dims = spatial_dims + add_dims  # Add time and nu dimensions
         self.input_dims = input_dims
         self.hidden_dims = hidden_dims
         self.dgm_dims = dgm_dims
@@ -136,7 +140,7 @@ class MIM(nn.Module):
 
         p_layers = create_fc_layers(
             input_dims, hidden_dims, hidden_activation, dgm_dims,
-            n_dgm_layers, output_activation, output_dim=input_dims-2)
+            n_dgm_layers, output_activation, output_dim=spatial_dims)
         self.p_input_layer, self.p_hidden_layers, self.p_dgm_layers, self.p_output_layer = p_layers
 
 
