@@ -1,4 +1,7 @@
+from typing import Callable
+
 import torch.nn as nn
+import torch
 from torch import tanh, sigmoid
 
 
@@ -103,3 +106,57 @@ class DGMLayer(nn.Module):
         H = tanh(self.U_h(x) + self.W_h(S * R) + self.B_h(S1))
         S_new = (1 - G) * H + Z * S
         return S_new
+
+
+class MIM(nn.Module):
+    def __init__(self,
+                 spatial_dims: int,
+                 add_dims: int,
+                 hidden_dims: list,
+                 dgm_dims: int,
+                 n_dgm_layers: int,
+                 hidden_activation: str,
+                 output_activation: str,
+                 initial_conditions: Callable
+                 ):
+        super(MIM, self).__init__()
+        self.spatial_dims = spatial_dims
+        self.add_dims = add_dims
+        input_dims = spatial_dims + add_dims  # Add time and nu dimensions
+        self.input_dims = input_dims
+        self.hidden_dims = hidden_dims
+        self.dgm_dims = dgm_dims
+        self.n_dgm_layers = n_dgm_layers
+        self.hidden_activation = hidden_activation
+        self.output_activation = output_activation
+        self.initial_conditions = initial_conditions
+        self.name = "MIM"
+
+        # Create network layers
+        u_layers = create_fc_layers(
+            input_dims, hidden_dims, hidden_activation, dgm_dims,
+            n_dgm_layers, output_activation, output_dim=1)
+        self.u_input_layer, self.u_hidden_layers, self.u_dgm_layers, self.u_output_layer = u_layers
+
+        p_layers = create_fc_layers(
+            input_dims, hidden_dims, hidden_activation, dgm_dims,
+            n_dgm_layers, output_activation, output_dim=spatial_dims)
+        self.p_input_layer, self.p_hidden_layers, self.p_dgm_layers, self.p_output_layer = p_layers
+
+
+def create_x_circ(x: torch.Tensor) -> torch.Tensor:
+    spatial_dims = x.shape[1]
+    x_circ = torch.zeros(x.shape[0], 8*spatial_dims, device=x.device)
+    for i in range(spatial_dims):
+        for j in range(4):
+            sin_index = i*8+j*2
+            cos_index = i*8+j*2+1
+            x_circ[:, sin_index] = torch.sin(2 * torch.pi * (j+1) * x[:, i])
+            x_circ[:, cos_index] = torch.cos(2 * torch.pi * (j+1) * x[:, i])
+    return x_circ
+
+
+if __name__ == "__main__":
+    x = torch.rand(10, 16)
+    # print(create_x_circ(x).shape)
+    print(create_x_circ(x)[0], x[0])
