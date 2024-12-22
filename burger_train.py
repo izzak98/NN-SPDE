@@ -114,6 +114,90 @@ class TrainDGM():
         return losses
 
 
+class TrainMIM():
+    def __init__(self, lambda1=1, use_stochastic=False):
+        self.lambda1 = lambda1  # Consider increasing this significantly
+        self.use_stochastic = use_stochastic
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        assert self.lambda1 >= 1, "Lambda value must be greater than or equal to 1"
+
+    def burger_residual_loss_nd(self, model, t, nu, alpha, *coords, w):
+        for coord in coords:
+            coord.requires_grad = True
+        t.requires_grad = True
+
+        u, p = model(t, nu, alpha, *coords)
+
+        # Compute ut through autograd
+        u_t = torch.autograd.grad(
+            u, t, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+
+        # Use learned p for Laplacian
+        laplacian_u = torch.zeros_like(u)
+        convection_term = torch.zeros_like(u)
+        for i, coord in enumerate(coords):
+            # Get divergence of p
+            p_i = p[:, [i]]
+            p_i_grad = torch.autograd.grad(
+                p_i, coord, grad_outputs=torch.ones_like(p_i), create_graph=True)[0]
+            laplacian_u += p_i_grad
+            convection_term += u * p_i
+
+        if self.use_stochastic:
+            residual = u_t + convection_term - nu * laplacian_u - \
+                (alpha*torch.pow(u, len(coords)) * w)
+        else:
+            residual = u_t + convection_term - nu * laplacian_u
+
+        return torch.mean(residual**2)
+
+    def gradient_loss(self, model, t, nu, alpha, coords):
+        # Initialize total loss
+        total_diff = 0
+
+        # Ensure gradients enabled
+        for coord in coords:
+            coord.requires_grad = True
+
+        # Forward pass to compute u and p
+        u, p = model(t, nu, alpha, *coords)
+
+        # For each dimension
+        for i, coord in enumerate(coords):
+            # Compute true gradient through autograd
+            u_grad = torch.autograd.grad(
+                u, coord, grad_outputs=torch.ones_like(u), create_graph=True)[0]
+
+            # Compare with learned gradient (p)
+            diff = (p[:, [i]] - u_grad) ** 2
+            total_diff += torch.mean(diff)
+
+        return total_diff
+
+    def forward(self, model, t, nu, alpha, coords, ws, boundaries):
+        total_residual_loss = torch.tensor(0, device=self.device, dtype=torch.float32)
+        for w in ws:
+            residual_loss = self.burger_residual_loss_nd(model, t, nu, alpha, *coords, w=w)
+            total_residual_loss += residual_loss
+
+        avg_residual_loss = total_residual_loss / len(ws)
+        gradient_loss = self.gradient_loss(model, t, nu, alpha, coords)
+
+        # The key change: significantly increase lambda1 to enforce gradient matching
+        total_loss = avg_residual_loss + self.lambda1 * gradient_loss
+
+        losses = {
+            "Avg. Residual Loss": avg_residual_loss,
+            "Gradient Loss": gradient_loss,
+            "total_loss": total_loss,
+        }
+
+        with torch.no_grad():
+            losses["unadjusted_total_loss"] = avg_residual_loss + gradient_loss
+
+        return losses
+
+
 def train_burger(model, optimizer, epochs, batch_size, boundaries, loss_calculator, num_samples=5):
     run_name = f"{model.name}-{model.input_dims-1}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     log_dir = Path("runs") / run_name
@@ -135,8 +219,7 @@ def train_burger(model, optimizer, epochs, batch_size, boundaries, loss_calculat
         log_a, log_b = torch.log(torch.tensor(1e-10)), torch.log(torch.tensor(1.0))
         nu = torch.exp(torch.empty(batch_size, 1).uniform_(log_a, log_b)).to(DEVICE)
         # sample alpha with log-uniform distribution
-        log_a, log_b = torch.log(torch.tensor(1e-10)), torch.log(torch.tensor(1.0))
-        alpha = torch.exp(torch.empty(batch_size, 1).uniform_(log_a, log_b)).to(DEVICE)
+        alpha = torch.rand((batch_size, 1), device=DEVICE)
         coords = [torch.rand((batch_size, 1), device=DEVICE) for _ in range(len(boundaries))]
         points = torch.cat([t] + coords, dim=1)
         ws = [sheet.simulate(points) for _ in range(num_samples)]
