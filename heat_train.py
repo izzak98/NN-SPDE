@@ -18,7 +18,7 @@ def initial_condition_loss_nd(model, nu, coords, u0_func):
     return torch.mean((u0_pred - u0_true)**2)
 
 
-def adjusted_initial_condition(*coords):
+def heat_initial_condition(*coords):
     n_dims = len(coords)
     cos_terms = [torch.cos(torch.pi * xi) for xi in coords]
     prod_cos = torch.prod(torch.stack(cos_terms), dim=0)
@@ -28,7 +28,7 @@ def adjusted_initial_condition(*coords):
     return prod_cos * scaling_factor
 
 
-class TrainDGM():
+class HeatTrainDGM():
     def __init__(self, lambda1=1, lambda2=1, use_stochastic=False):
         self.lambda1 = lambda1
         self.lambda2 = lambda2
@@ -87,7 +87,7 @@ class TrainDGM():
     def compute_losses(self, model, batch, boundaries):
         t, nu, *coords = batch
         loss_initial = initial_condition_loss_nd(
-            model, nu, coords, adjusted_initial_condition
+            model, nu, coords, heat_initial_condition
         )
         loss_boundary = self.neumann_boundary_condition_loss_nd(model, t, nu, boundaries)
         return {
@@ -114,7 +114,7 @@ class TrainDGM():
         return losses
 
 
-class TrainMIM():
+class HeatTrainMIM():
     def __init__(self, lambda1=1, use_stochastic=False):
         self.lambda1 = lambda1  # Consider increasing this significantly
         self.use_stochastic = use_stochastic
@@ -196,7 +196,7 @@ class TrainMIM():
 
 
 def train_heat(model, optimizer, epochs, batch_size, boundaries, loss_calculator, num_samples=5):
-    run_name = f"{model.name}-{model.input_dims-1}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    run_name = f"{model.name}-{model.spatial_dims}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     log_dir = Path("runs") / run_name
     writer = SummaryWriter(log_dir)
 
@@ -230,7 +230,7 @@ def train_heat(model, optimizer, epochs, batch_size, boundaries, loss_calculator
         for key, value in losses.items():
             writer.add_scalar(f"Loss/{key}", value.item(), epoch)
 
-        if loss < best_loss:
+        if losses["unadjusted_total_loss"] < best_loss:
             best_loss = losses["unadjusted_total_loss"]
             torch.save({
                 "epoch": epoch,

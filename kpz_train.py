@@ -18,7 +18,7 @@ def initial_condition_loss_nd(model, nu, alpha, lambda_kpz, coords, u0_func):
     return torch.mean((u0_pred - u0_true)**2)
 
 
-def adjusted_initial_condition(*coords):
+def kpz_initial_condition(*coords):
     n_dims = len(coords)
     joint_terms = [torch.sin(2*torch.pi * xi) + torch.cos(2*torch.pi * xi) for xi in coords]
     prod_joint = torch.sum(torch.stack(joint_terms), dim=0)
@@ -28,7 +28,7 @@ def adjusted_initial_condition(*coords):
     return prod_joint / scaling_factor
 
 
-class TrainDGM():
+class KPZTrainDGM():
     def __init__(self, lambda1=1, lambda2=1, use_stochastic=False):
         self.lambda1 = lambda1
         self.lambda2 = lambda2
@@ -88,7 +88,7 @@ class TrainDGM():
     def compute_losses(self, model, batch, boundaries):
         t, nu, alpha, lambda_kpz, *coords = batch
         loss_initial = initial_condition_loss_nd(
-            model, nu, alpha, lambda_kpz, coords, adjusted_initial_condition
+            model, nu, alpha, lambda_kpz, coords, kpz_initial_condition
         )
         loss_boundary = self.periodic_boundary_condition_loss_nd(
             model, t, nu, alpha, lambda_kpz, boundaries, *coords)
@@ -116,7 +116,7 @@ class TrainDGM():
         return losses
 
 
-class TrainMIM():
+class KPZTrainMIM():
     def __init__(self, lambda1=1, use_stochastic=False):
         self.lambda1 = lambda1  # Consider increasing this significantly
         self.use_stochastic = use_stochastic
@@ -204,7 +204,7 @@ class TrainMIM():
 
 
 def train_kpz(model, optimizer, epochs, batch_size, boundaries, loss_calculator, num_samples=5):
-    run_name = f"{model.name}-{model.input_dims-1}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    run_name = f"{model.name}-{model.spatial_dims}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     log_dir = Path("runs") / run_name
     writer = SummaryWriter(log_dir)
 
@@ -241,7 +241,7 @@ def train_kpz(model, optimizer, epochs, batch_size, boundaries, loss_calculator,
         for key, value in losses.items():
             writer.add_scalar(f"Loss/{key}", value.item(), epoch)
 
-        if loss < best_loss:
+        if losses["unadjusted_total_loss"] < best_loss:
             best_loss = losses["unadjusted_total_loss"]
             torch.save({
                 "epoch": epoch,

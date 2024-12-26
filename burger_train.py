@@ -18,7 +18,7 @@ def initial_condition_loss_nd(model, nu, alpha, coords, u0_func):
     return torch.mean((u0_pred - u0_true)**2)
 
 
-def adjusted_initial_condition(*coords):
+def burger_initial_condition(*coords):
     n_dims = len(coords)
     sin_terms = [torch.sin(torch.pi * xi) for xi in coords]
     prod_sin = torch.prod(torch.stack(sin_terms), dim=0)
@@ -28,7 +28,7 @@ def adjusted_initial_condition(*coords):
     return prod_sin * scaling_factor
 
 
-class TrainDGM():
+class BurgerTrainDGM():
     def __init__(self, lambda1=1, lambda2=1, use_stochastic=False):
         self.lambda1 = lambda1
         self.lambda2 = lambda2
@@ -86,7 +86,7 @@ class TrainDGM():
     def compute_losses(self, model, batch, boundaries):
         t, nu, alpha, *coords = batch
         loss_initial = initial_condition_loss_nd(
-            model, nu, alpha, coords, adjusted_initial_condition
+            model, nu, alpha, coords, burger_initial_condition
         )
         loss_boundary = self.periodic_boundary_condition_loss_nd(
             model, t, nu, alpha, boundaries, *coords)
@@ -114,7 +114,7 @@ class TrainDGM():
         return losses
 
 
-class TrainMIM():
+class BurgerTrainMIM():
     def __init__(self, lambda1=1, use_stochastic=False):
         self.lambda1 = lambda1  # Consider increasing this significantly
         self.use_stochastic = use_stochastic
@@ -199,7 +199,7 @@ class TrainMIM():
 
 
 def train_burger(model, optimizer, epochs, batch_size, boundaries, loss_calculator, num_samples=5):
-    run_name = f"{model.name}-{model.input_dims-1}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    run_name = f"{model.name}-{model.spatial_dims}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     log_dir = Path("runs") / run_name
     writer = SummaryWriter(log_dir)
 
