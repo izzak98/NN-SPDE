@@ -112,11 +112,16 @@ class MIM(nn.Module):
     def __init__(self,
                  spatial_dims: int,
                  add_dims: int,
-                 hidden_dims: list,
-                 dgm_dims: int,
-                 n_dgm_layers: int,
-                 hidden_activation: str,
-                 output_activation: str,
+                 u_hidden_dims: list,
+                 u_dgm_dims: int,
+                 u_n_dgm_layers: int,
+                 u_hidden_activation: str,
+                 u_output_activation: str,
+                 p_hidden_dims: list,
+                 p_dgm_dims: int,
+                 p_n_dgm_layers: int,
+                 p_hidden_activation: str,
+                 p_output_activation: str,
                  initial_conditions: Callable
                  ):
         super(MIM, self).__init__()
@@ -124,23 +129,40 @@ class MIM(nn.Module):
         self.add_dims = add_dims
         input_dims = spatial_dims + add_dims  # Add time and nu dimensions
         self.input_dims = input_dims
-        self.hidden_dims = hidden_dims
-        self.dgm_dims = dgm_dims
-        self.n_dgm_layers = n_dgm_layers
-        self.hidden_activation = hidden_activation
-        self.output_activation = output_activation
+        self.u_hidden_dims = u_hidden_dims
+        self.u_dgm_dims = u_dgm_dims
+        self.u_n_dgm_layers = u_n_dgm_layers
+        self.u_hidden_activation = u_hidden_activation
+        self.u_output_activation = u_output_activation
+        self.p_hidden_dims = p_hidden_dims
+        self.p_dgm_dims = p_dgm_dims
+        self.p_n_dgm_layers = p_n_dgm_layers
+        self.p_hidden_activation = p_hidden_activation
+        self.p_output_activation = p_output_activation
         self.initial_conditions = initial_conditions
         self.name = "MIM"
 
         # Create network layers
         u_layers = create_fc_layers(
-            input_dims, hidden_dims, hidden_activation, dgm_dims,
-            n_dgm_layers, output_activation, output_dim=1)
+            input_dim=self.input_dims,
+            hidden_dims=self.u_hidden_dims,
+            dense_activation=self.u_hidden_activation,
+            dgm_dims=self.u_dgm_dims,
+            n_dgm_layers=self.u_n_dgm_layers,
+            output_activation=self.u_output_activation,
+            output_dim=1
+        )
         self.u_input_layer, self.u_hidden_layers, self.u_dgm_layers, self.u_output_layer = u_layers
 
         p_layers = create_fc_layers(
-            input_dims, hidden_dims, hidden_activation, dgm_dims,
-            n_dgm_layers, output_activation, output_dim=spatial_dims)
+            input_dim=self.input_dims,
+            hidden_dims=self.p_hidden_dims,
+            dense_activation=self.p_hidden_activation,
+            dgm_dims=self.p_dgm_dims,
+            n_dgm_layers=self.p_n_dgm_layers,
+            output_activation=self.p_output_activation,
+            output_dim=spatial_dims
+        )
         self.p_input_layer, self.p_hidden_layers, self.p_dgm_layers, self.p_output_layer = p_layers
 
 
