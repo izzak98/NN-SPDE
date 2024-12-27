@@ -37,7 +37,7 @@ class DGM(nn.Module):
         # t: (batch_size, 1)
         # x: (batch_size, dims)
         add_args = args[:-self.spatial_dims]
-        x = torch.cat(args[-self.spatial_dims:], dim=1)
+        x = torch.cat(args[-self.spatial_dims:], dim=1).to(t.device)
         inps = torch.cat([t, *add_args, x], dim=1)
         input_x = self.input_layer(inps)
 
@@ -74,6 +74,7 @@ class HeatMIM(MIM):
         super(HeatMIM, self).__init__(
             spatial_dims=spatial_dims,
             add_dims=add_dims,
+            p_output_dims=spatial_dims,
             u_hidden_dims=u_hidden_dims,
             u_dgm_dims=u_dgm_dims,
             u_n_dgm_layers=u_n_dgm_layers,
@@ -155,6 +156,7 @@ class BurgerMIM(MIM):
                  ):
         super(BurgerMIM, self).__init__(
             spatial_dims=spatial_dims*8,
+            p_output_dims=spatial_dims,
             add_dims=add_dims,
             u_hidden_dims=u_hidden_dims,
             u_dgm_dims=u_dgm_dims,
@@ -227,6 +229,7 @@ class KPZMIM(MIM):
                  ):
         super(KPZMIM, self).__init__(
             spatial_dims=spatial_dims*8,
+            p_output_dims=spatial_dims,
             add_dims=add_dims,
             u_hidden_dims=u_hidden_dims,
             u_dgm_dims=u_dgm_dims,

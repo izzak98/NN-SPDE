@@ -111,6 +111,7 @@ class DGMLayer(nn.Module):
 class MIM(nn.Module):
     def __init__(self,
                  spatial_dims: int,
+                 p_output_dims: int,
                  add_dims: int,
                  u_hidden_dims: list,
                  u_dgm_dims: int,
@@ -126,6 +127,7 @@ class MIM(nn.Module):
                  ):
         super(MIM, self).__init__()
         self.spatial_dims = spatial_dims
+        self.p_output_dims = p_output_dims
         self.add_dims = add_dims
         input_dims = spatial_dims + add_dims  # Add time and nu dimensions
         self.input_dims = input_dims
@@ -161,14 +163,15 @@ class MIM(nn.Module):
             dgm_dims=self.p_dgm_dims,
             n_dgm_layers=self.p_n_dgm_layers,
             output_activation=self.p_output_activation,
-            output_dim=spatial_dims
+            output_dim=self.p_output_dims
         )
         self.p_input_layer, self.p_hidden_layers, self.p_dgm_layers, self.p_output_layer = p_layers
 
 
 def create_x_circ(x: torch.Tensor) -> torch.Tensor:
     spatial_dims = x.shape[1]
-    x_circ = torch.zeros(x.shape[0], 8*spatial_dims, device=x.device)
+    new_spatial_dims = x.shape[1]*8
+    x_circ = torch.zeros(x.shape[0], new_spatial_dims, device=x.device)
     for i in range(spatial_dims):
         for j in range(4):
             sin_index = i*8+j*2
@@ -179,6 +182,6 @@ def create_x_circ(x: torch.Tensor) -> torch.Tensor:
 
 
 if __name__ == "__main__":
-    x = torch.rand(10, 16)
+    x = torch.rand(10, 2)
     # print(create_x_circ(x).shape)
     print(create_x_circ(x)[0], x[0])
