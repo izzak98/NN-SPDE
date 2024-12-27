@@ -6,9 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.white_noise import BrownianSheet
 from pathlib import Path
 from datetime import datetime
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {DEVICE}")
+from accelerate import Accelerator
 
 
 def initial_condition_loss_nd(model, nu, coords, u0_func):
@@ -18,7 +16,7 @@ def initial_condition_loss_nd(model, nu, coords, u0_func):
     return torch.mean((u0_pred - u0_true)**2)
 
 
-def adjusted_initial_condition(*coords):
+def heat_initial_condition(*coords):
     n_dims = len(coords)
     cos_terms = [torch.cos(torch.pi * xi) for xi in coords]
     prod_cos = torch.prod(torch.stack(cos_terms), dim=0)
@@ -28,13 +26,11 @@ def adjusted_initial_condition(*coords):
     return prod_cos * scaling_factor
 
 
-class TrainDGM():
+class HeatTrainDGM():
     def __init__(self, lambda1=1, lambda2=1, use_stochastic=False):
         self.lambda1 = lambda1
         self.lambda2 = lambda2
         self.use_stochastic = use_stochastic
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         assert self.lambda1 >= 1 and self.lambda2 >= 1, "Lambda values must be greater than or equal to 1"
 
     def heat_residual_loss_nd(self, model, t, nu, *coords, w):
@@ -66,8 +62,7 @@ class TrainDGM():
         batch_size = t.shape[0]
 
         for dim, (min_val, max_val) in enumerate(boundaries):
-            coords_min = [torch.rand((batch_size, 1), device=self.device)
-                          for _ in range(len(boundaries))]
+            coords_min = [torch.rand((batch_size, 1)) for _ in range(len(boundaries))]
             coords_max = [x.clone() for x in coords_min]
 
             coords_min[dim] = min_val * torch.ones_like(coords_min[dim])
@@ -87,7 +82,7 @@ class TrainDGM():
     def compute_losses(self, model, batch, boundaries):
         t, nu, *coords = batch
         loss_initial = initial_condition_loss_nd(
-            model, nu, coords, adjusted_initial_condition
+            model, nu, coords, heat_initial_condition
         )
         loss_boundary = self.neumann_boundary_condition_loss_nd(model, t, nu, boundaries)
         return {
@@ -96,7 +91,7 @@ class TrainDGM():
         }
 
     def forward(self, model, t, nu, coords, ws, boundaries):
-        total_residual_loss = torch.tensor(0, device=self.device, dtype=torch.float32)
+        total_residual_loss = torch.tensor(0., device=t.device, dtype=torch.float32)
         batch = (t, nu, *coords)
         for w in ws:
             residual_loss = self.heat_residual_loss_nd(model, t, nu, *coords, w=w)
@@ -114,11 +109,10 @@ class TrainDGM():
         return losses
 
 
-class TrainMIM():
+class HeatTrainMIM():
     def __init__(self, lambda1=1, use_stochastic=False):
         self.lambda1 = lambda1  # Consider increasing this significantly
         self.use_stochastic = use_stochastic
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         assert self.lambda1 >= 1, "Lambda value must be greater than or equal to 1"
 
     def heat_residual_loss_nd(self, model, t, nu, *coords, w):
@@ -172,7 +166,7 @@ class TrainMIM():
         return total_diff
 
     def forward(self, model, t, nu, coords, ws, boundaries):
-        total_residual_loss = torch.tensor(0, device=self.device, dtype=torch.float32)
+        total_residual_loss = torch.tensor(0., device=t.device, dtype=torch.float32)
         for w in ws:
             residual_loss = self.heat_residual_loss_nd(model, t, nu, *coords, w=w)
             total_residual_loss += residual_loss
@@ -195,48 +189,84 @@ class TrainMIM():
         return losses
 
 
-def train_heat(model, optimizer, epochs, batch_size, boundaries, loss_calculator, num_samples=5):
-    run_name = f"{model.name}-{model.input_dims-1}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+def train_heat(model,
+               optimizer,
+               epochs,
+               batch_size,
+               boundaries,
+               loss_calculator,
+               scheduler=None,
+               num_samples=5,
+               trial_n=""):
+
+    # Initialize accelerator
+    accelerator = Accelerator(mixed_precision='fp16')
+
+    if trial_n != "":
+        trial_n = f"{trial_n}-"
+
+    run_name = f"{trial_n}{model.name}-{model.spatial_dims}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     log_dir = Path("runs") / run_name
     writer = SummaryWriter(log_dir)
 
-    sheet = BrownianSheet(device=DEVICE)
+    # Initialize BrownianSheet with accelerator's device
+    sheet = BrownianSheet(device=accelerator.device)
 
-    model = model.to(DEVICE)
-    scaler = torch.amp.GradScaler()
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=100, factor=0.5)
+    # Prepare model and optimizer
+    model, optimizer = accelerator.prepare(model, optimizer)
+    if scheduler is not None:
+        scheduler = accelerator.prepare(scheduler)
+
     best_loss = float("inf")
     pbar = tqdm(range(epochs), desc="Training")
 
     for epoch in pbar:
         model.train()
 
-        t = torch.rand((batch_size, 1), device=DEVICE)
-        # sample nu with log-uniform distribution
+        # Create all tensors on CPU first
+        t = torch.rand((batch_size, 1))
         log_a, log_b = torch.log(torch.tensor(1e-10)), torch.log(torch.tensor(1.0))
-        nu = torch.exp(torch.empty(batch_size, 1).uniform_(log_a, log_b)).to(DEVICE)
-        coords = [torch.rand((batch_size, 1), device=DEVICE) for _ in range(len(boundaries))]
+        nu = torch.exp(torch.empty(batch_size, 1).uniform_(log_a, log_b))
+        coords = [torch.rand((batch_size, 1)) for _ in range(len(boundaries))]
+
+        # Move all tensors to the same device before concatenation
+        t = t.to(accelerator.device)
+        nu = nu.to(accelerator.device)
+        coords = [c.to(accelerator.device) for c in coords]
+
+        # Now all tensors are on the same device for concatenation
         points = torch.cat([t] + coords, dim=1)
         ws = [sheet.simulate(points) for _ in range(num_samples)]
+
+        # Calculate losses
         losses = loss_calculator.forward(model, t, nu, coords, ws, boundaries)
         loss = losses["total_loss"]
-        optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
 
-        scheduler.step(loss)
+        # Replace manual scaling with accelerator
+        optimizer.zero_grad()
+        accelerator.backward(loss)
+        optimizer.step()
+
+        if scheduler is not None:
+            scheduler.step(loss)
+
+        # Update progress bar and tensorboard
         pbar.set_postfix({key: f"{value.item():.2e}" for key, value in losses.items()})
         for key, value in losses.items():
             writer.add_scalar(f"Loss/{key}", value.item(), epoch)
 
-        if loss < best_loss:
+        if losses["unadjusted_total_loss"] < best_loss:
             best_loss = losses["unadjusted_total_loss"]
-            torch.save({
+            # Save using accelerator
+            accelerator.save({
                 "epoch": epoch,
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": accelerator.unwrap_model(model).state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "loss": loss,
             }, log_dir / "best_model.pt")
 
+        if any([l.item() < 1e-16 for l in losses.values()]):
+            return float("inf")
+
     writer.close()
+    return best_loss

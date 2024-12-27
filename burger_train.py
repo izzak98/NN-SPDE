@@ -6,9 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.white_noise import BrownianSheet
 from pathlib import Path
 from datetime import datetime
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {DEVICE}")
+from accelerate import Accelerator
 
 
 def initial_condition_loss_nd(model, nu, alpha, coords, u0_func):
@@ -18,7 +16,7 @@ def initial_condition_loss_nd(model, nu, alpha, coords, u0_func):
     return torch.mean((u0_pred - u0_true)**2)
 
 
-def adjusted_initial_condition(*coords):
+def burger_initial_condition(*coords):
     n_dims = len(coords)
     sin_terms = [torch.sin(torch.pi * xi) for xi in coords]
     prod_sin = torch.prod(torch.stack(sin_terms), dim=0)
@@ -28,13 +26,11 @@ def adjusted_initial_condition(*coords):
     return prod_sin * scaling_factor
 
 
-class TrainDGM():
+class BurgerTrainDGM():
     def __init__(self, lambda1=1, lambda2=1, use_stochastic=False):
         self.lambda1 = lambda1
         self.lambda2 = lambda2
         self.use_stochastic = use_stochastic
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         assert self.lambda1 >= 1 and self.lambda2 >= 1, "Lambda values must be greater than or equal to 1"
 
     def burger_residual_loss_nd(self, model, t, nu, alpha, *coords, w):
@@ -59,8 +55,8 @@ class TrainDGM():
             laplacian_u += u_xx
 
         if self.use_stochastic:
-            residual = u_t + convection_term - nu * laplacian_u - \
-                (alpha*torch.pow(u, len(coords)) * w)
+            stochastic_term = alpha * torch.pow(u, len(coords)) * w
+            residual = u_t + convection_term - nu * laplacian_u - stochastic_term
         else:
             residual = u_t + convection_term - nu * laplacian_u
 
@@ -73,10 +69,10 @@ class TrainDGM():
         for dim, (min_val, max_val) in enumerate(boundaries):
             min_coords = list(coords)
             min_coords[dim] = torch.tensor(
-                [[min_val]] * batch_size, device=self.device)
+                [[min_val]] * batch_size, device=t.device)
             max_coords = list(coords)
             max_coords[dim] = torch.tensor(
-                [[max_val]] * batch_size, device=self.device)
+                [[max_val]] * batch_size, device=t.device)
             u_min = model(t, nu, alpha, *min_coords)
             u_max = model(t, nu, alpha, *max_coords)
             total_loss += torch.mean((u_min - u_max)**2)
@@ -86,7 +82,7 @@ class TrainDGM():
     def compute_losses(self, model, batch, boundaries):
         t, nu, alpha, *coords = batch
         loss_initial = initial_condition_loss_nd(
-            model, nu, alpha, coords, adjusted_initial_condition
+            model, nu, alpha, coords, burger_initial_condition
         )
         loss_boundary = self.periodic_boundary_condition_loss_nd(
             model, t, nu, alpha, boundaries, *coords)
@@ -96,7 +92,7 @@ class TrainDGM():
         }
 
     def forward(self, model, t, nu, alpha, coords, ws, boundaries):
-        total_residual_loss = torch.tensor(0, device=self.device, dtype=torch.float32)
+        total_residual_loss = torch.tensor(0., device=t.device, dtype=torch.float32)
         batch = (t, nu, alpha, *coords)
         for w in ws:
             residual_loss = self.burger_residual_loss_nd(model, t, nu, alpha, *coords, w=w)
@@ -114,11 +110,10 @@ class TrainDGM():
         return losses
 
 
-class TrainMIM():
+class BurgerTrainMIM():
     def __init__(self, lambda1=1, use_stochastic=False):
         self.lambda1 = lambda1  # Consider increasing this significantly
         self.use_stochastic = use_stochastic
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         assert self.lambda1 >= 1, "Lambda value must be greater than or equal to 1"
 
     def burger_residual_loss_nd(self, model, t, nu, alpha, *coords, w):
@@ -144,8 +139,8 @@ class TrainMIM():
             convection_term += u * p_i
 
         if self.use_stochastic:
-            residual = u_t + convection_term - nu * laplacian_u - \
-                (alpha*torch.pow(u, len(coords)) * w)
+            stochastic_term = alpha * torch.pow(u, len(coords)) * w
+            residual = u_t + convection_term - nu * laplacian_u - stochastic_term
         else:
             residual = u_t + convection_term - nu * laplacian_u
 
@@ -175,7 +170,7 @@ class TrainMIM():
         return total_diff
 
     def forward(self, model, t, nu, alpha, coords, ws, boundaries):
-        total_residual_loss = torch.tensor(0, device=self.device, dtype=torch.float32)
+        total_residual_loss = torch.tensor(0., device=t.device, dtype=torch.float32)
         for w in ws:
             residual_loss = self.burger_residual_loss_nd(model, t, nu, alpha, *coords, w=w)
             total_residual_loss += residual_loss
@@ -198,50 +193,74 @@ class TrainMIM():
         return losses
 
 
-def train_burger(model, optimizer, epochs, batch_size, boundaries, loss_calculator, num_samples=5):
-    run_name = f"{model.name}-{model.input_dims-1}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+def train_burger(model,
+                 optimizer,
+                 epochs,
+                 batch_size,
+                 boundaries,
+                 loss_calculator,
+                 scheduler=None,
+                 num_samples=5,
+                 trial_n=""):
+
+    # Initialize accelerator
+    accelerator = Accelerator(mixed_precision='fp16')
+
+    if trial_n != "":
+        trial_n = f"_{trial_n}"
+    run_name = f"{trial_n}{model.name}-{model.spatial_dims}D-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     log_dir = Path("runs") / run_name
     writer = SummaryWriter(log_dir)
 
-    sheet = BrownianSheet(device=DEVICE)
+    sheet = BrownianSheet(device=accelerator.device)
 
-    model = model.to(DEVICE)
-    scaler = torch.amp.GradScaler()
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=100, factor=0.5)
+    # Prepare model and optimizer
+    model, optimizer = accelerator.prepare(model, optimizer)
+    if scheduler is not None:
+        scheduler = accelerator.prepare(scheduler)
+
     best_loss = float("inf")
     pbar = tqdm(range(epochs), desc="Training")
 
     for epoch in pbar:
         model.train()
 
-        t = torch.rand((batch_size, 1), device=DEVICE)
-        # sample nu with log-uniform distribution
+        # Create tensors and move them to the correct device
+        t = torch.rand((batch_size, 1)).to(accelerator.device)
         log_a, log_b = torch.log(torch.tensor(1e-10)), torch.log(torch.tensor(1.0))
-        nu = torch.exp(torch.empty(batch_size, 1).uniform_(log_a, log_b)).to(DEVICE)
-        # sample alpha with log-uniform distribution
-        alpha = torch.rand((batch_size, 1), device=DEVICE)
-        coords = [torch.rand((batch_size, 1), device=DEVICE) for _ in range(len(boundaries))]
+        nu = torch.exp(torch.empty(batch_size, 1).uniform_(log_a, log_b)).to(accelerator.device)
+        alpha = torch.rand((batch_size, 1)).to(accelerator.device)
+        coords = [torch.rand((batch_size, 1)).to(accelerator.device)
+                  for _ in range(len(boundaries))]
+
         points = torch.cat([t] + coords, dim=1)
         ws = [sheet.simulate(points) for _ in range(num_samples)]
+
         losses = loss_calculator.forward(model, t, nu, alpha, coords, ws, boundaries)
         loss = losses["total_loss"]
-        optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
 
-        scheduler.step(loss)
+        optimizer.zero_grad()
+        accelerator.backward(loss)
+        optimizer.step()
+
+        if scheduler is not None:
+            scheduler.step(loss)
+
         pbar.set_postfix({key: f"{value.item():.2e}" for key, value in losses.items()})
         for key, value in losses.items():
             writer.add_scalar(f"Loss/{key}", value.item(), epoch)
 
-        if loss < best_loss:
+        if losses["unadjusted_total_loss"] < best_loss:
             best_loss = losses["unadjusted_total_loss"]
-            torch.save({
+            accelerator.save({
                 "epoch": epoch,
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": accelerator.unwrap_model(model).state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "loss": loss,
             }, log_dir / "best_model.pt")
 
+        if any([l.item() < 1e-16 for l in losses.values()]):
+            return float("inf")
+
     writer.close()
+    return best_loss

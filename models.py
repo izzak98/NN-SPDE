@@ -13,7 +13,8 @@ class DGM(nn.Module):
                  dgm_dims: int,
                  n_dgm_layers: int,
                  hidden_activation: str,
-                 output_activation: str):
+                 output_activation: str,
+                 name: str = "DGM"):
         super(DGM, self).__init__()
         self.spatial_dims = spatial_dims
         self.add_dims = add_dims
@@ -24,7 +25,7 @@ class DGM(nn.Module):
         self.n_dgm_layers = n_dgm_layers
         self.hidden_activation = hidden_activation
         self.output_activation = output_activation
-        self.name = "Heat DGM"
+        self.name = name
 
         layers = create_fc_layers(
             input_dims, hidden_dims, hidden_activation, dgm_dims,
@@ -36,7 +37,7 @@ class DGM(nn.Module):
         # t: (batch_size, 1)
         # x: (batch_size, dims)
         add_args = args[:-self.spatial_dims]
-        x = torch.cat(args[-self.spatial_dims:], dim=1)
+        x = torch.cat(args[-self.spatial_dims:], dim=1).to(t.device)
         inps = torch.cat([t, *add_args, x], dim=1)
         input_x = self.input_layer(inps)
 
@@ -58,15 +59,34 @@ class HeatMIM(MIM):
     def __init__(self,
                  spatial_dims: int,
                  add_dims: int,
-                 hidden_dims: list,
-                 dgm_dims: int,
-                 n_dgm_layers: int,
-                 hidden_activation: str,
-                 output_activation: str,
-                 initial_conditions: Callable):
+                 u_hidden_dims: list,
+                 u_dgm_dims: int,
+                 u_n_dgm_layers: int,
+                 u_hidden_activation: str,
+                 u_output_activation: str,
+                 p_hidden_dims: list,
+                 p_dgm_dims: int,
+                 p_n_dgm_layers: int,
+                 p_hidden_activation: str,
+                 p_output_activation: str,
+                 initial_conditions: Callable
+                 ):
         super(HeatMIM, self).__init__(
-            spatial_dims, add_dims, hidden_dims, dgm_dims, n_dgm_layers,
-            hidden_activation, output_activation, initial_conditions)
+            spatial_dims=spatial_dims,
+            add_dims=add_dims,
+            p_output_dims=spatial_dims,
+            u_hidden_dims=u_hidden_dims,
+            u_dgm_dims=u_dgm_dims,
+            u_n_dgm_layers=u_n_dgm_layers,
+            u_hidden_activation=u_hidden_activation,
+            u_output_activation=u_output_activation,
+            p_hidden_dims=p_hidden_dims,
+            p_dgm_dims=p_dgm_dims,
+            p_n_dgm_layers=p_n_dgm_layers,
+            p_hidden_activation=p_hidden_activation,
+            p_output_activation=p_output_activation,
+            initial_conditions=initial_conditions
+        )
         self.name = "HeatMIM"
 
     def enforce_neumann_boundary(self, p_theta: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -122,15 +142,34 @@ class BurgerMIM(MIM):
     def __init__(self,
                  spatial_dims: int,
                  add_dims: int,
-                 hidden_dims: list,
-                 dgm_dims: int,
-                 n_dgm_layers: int,
-                 hidden_activation: str,
-                 output_activation: str,
-                 initial_conditions: Callable):
+                 u_hidden_dims: list,
+                 u_dgm_dims: int,
+                 u_n_dgm_layers: int,
+                 u_hidden_activation: str,
+                 u_output_activation: str,
+                 p_hidden_dims: list,
+                 p_dgm_dims: int,
+                 p_n_dgm_layers: int,
+                 p_hidden_activation: str,
+                 p_output_activation: str,
+                 initial_conditions: Callable
+                 ):
         super(BurgerMIM, self).__init__(
-            spatial_dims*8, add_dims, hidden_dims, dgm_dims, n_dgm_layers,
-            hidden_activation, output_activation, initial_conditions)
+            spatial_dims=spatial_dims*8,
+            p_output_dims=spatial_dims,
+            add_dims=add_dims,
+            u_hidden_dims=u_hidden_dims,
+            u_dgm_dims=u_dgm_dims,
+            u_n_dgm_layers=u_n_dgm_layers,
+            u_hidden_activation=u_hidden_activation,
+            u_output_activation=u_output_activation,
+            p_hidden_dims=p_hidden_dims,
+            p_dgm_dims=p_dgm_dims,
+            p_n_dgm_layers=p_n_dgm_layers,
+            p_hidden_activation=p_hidden_activation,
+            p_output_activation=p_output_activation,
+            initial_conditions=initial_conditions
+        )
 
         self.name = "BurgerMIM"
 
@@ -176,16 +215,34 @@ class KPZMIM(MIM):
     def __init__(self,
                  spatial_dims: int,
                  add_dims: int,
-                 hidden_dims: list,
-                 dgm_dims: int,
-                 n_dgm_layers: int,
-                 hidden_activation: str,
-                 output_activation: str,
-                 initial_conditions: Callable):
+                 u_hidden_dims: list,
+                 u_dgm_dims: int,
+                 u_n_dgm_layers: int,
+                 u_hidden_activation: str,
+                 u_output_activation: str,
+                 p_hidden_dims: list,
+                 p_dgm_dims: int,
+                 p_n_dgm_layers: int,
+                 p_hidden_activation: str,
+                 p_output_activation: str,
+                 initial_conditions: Callable
+                 ):
         super(KPZMIM, self).__init__(
-            spatial_dims*8, add_dims, hidden_dims, dgm_dims, n_dgm_layers,
-            hidden_activation, output_activation, initial_conditions)
-
+            spatial_dims=spatial_dims*8,
+            p_output_dims=spatial_dims,
+            add_dims=add_dims,
+            u_hidden_dims=u_hidden_dims,
+            u_dgm_dims=u_dgm_dims,
+            u_n_dgm_layers=u_n_dgm_layers,
+            u_hidden_activation=u_hidden_activation,
+            u_output_activation=u_output_activation,
+            p_hidden_dims=p_hidden_dims,
+            p_dgm_dims=p_dgm_dims,
+            p_n_dgm_layers=p_n_dgm_layers,
+            p_hidden_activation=p_hidden_activation,
+            p_output_activation=p_output_activation,
+            initial_conditions=initial_conditions
+        )
         self.name = "KPZMIM"
 
     def forward(self, t, nu, alpha, lambda_kpz, *args):
