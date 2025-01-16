@@ -7,5 +7,5 @@
     "dims": [
         2
     ],
-    "db_path": "opt.db"
+    "db_path": "sqlite:///opt.db"
 }

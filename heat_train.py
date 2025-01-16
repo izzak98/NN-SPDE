@@ -9,9 +9,7 @@ from datetime import datetime
 from accelerate import Accelerator
 
 
-def initial_condition_loss_nd(model, nu, coords, u0_func):
-    t0 = torch.zeros_like(coords[0])
-    u0_pred = model(t0, nu, *coords)
+def initial_condition_loss_nd(u0_pred, coords, u0_func):
     u0_true = u0_func(*coords)
     return torch.mean((u0_pred - u0_true)**2)
 
@@ -27,18 +25,28 @@ def heat_initial_condition(*coords):
 
 
 class HeatTrainDGM():
-    def __init__(self, lambda1=1, lambda2=1, use_stochastic=False):
+    def __init__(self, batch_size, lambda1=1, lambda2=1, use_stochastic=False):
         self.lambda1 = lambda1
         self.lambda2 = lambda2
         self.use_stochastic = use_stochastic
+        self.batch_size = batch_size
         assert self.lambda1 >= 1 and self.lambda2 >= 1, "Lambda values must be greater than or equal to 1"
+
+    def forward_pass(self, model, t, nu, coords):
+        batches = []
+        for i in range(0, t.shape[0], self.batch_size):
+            sub_t = t[i:i+self.batch_size]
+            sub_nu = nu[i:i+self.batch_size]
+            sub_coords = [c[i:i+self.batch_size] for c in coords]
+            batches.append(model(sub_t, sub_nu, *sub_coords))
+        return torch.cat(batches)
 
     def heat_residual_loss_nd(self, model, t, nu, *coords, w):
         for coord in coords:
             coord.requires_grad = True
         t.requires_grad = True
 
-        u = model(t, nu, *coords)
+        u = self.forward_pass(model, t, nu, coords)
         u_t = torch.autograd.grad(
             u, t, grad_outputs=torch.ones_like(u), create_graph=True)[0]
 
@@ -72,18 +80,21 @@ class HeatTrainDGM():
                 coord = coords[dim]
                 coord.requires_grad = True
 
-                u = model(t, nu, *coords)
+                u = self.forward_pass(model, t, nu, coords)
                 du_dx = torch.autograd.grad(
                     u, coord, grad_outputs=torch.ones_like(u), create_graph=True)[0]
                 total_loss += torch.mean(du_dx**2)
 
         return total_loss
 
+    def compute_initial_loss(self, model, nu, coords):
+        t0 = torch.zeros_like(nu)
+        u0_pred = self.forward_pass(model, t0, nu, coords)
+        return initial_condition_loss_nd(u0_pred, coords, heat_initial_condition)
+
     def compute_losses(self, model, batch, boundaries):
         t, nu, *coords = batch
-        loss_initial = initial_condition_loss_nd(
-            model, nu, coords, heat_initial_condition
-        )
+        loss_initial = self.compute_initial_loss(model, nu, coords)
         loss_boundary = self.neumann_boundary_condition_loss_nd(model, t, nu, boundaries)
         return {
             "initial_loss": loss_initial,
@@ -110,17 +121,30 @@ class HeatTrainDGM():
 
 
 class HeatTrainMIM():
-    def __init__(self, lambda1=1, use_stochastic=False):
+    def __init__(self, batch_size, lambda1=1, use_stochastic=False):
         self.lambda1 = lambda1  # Consider increasing this significantly
         self.use_stochastic = use_stochastic
+        self.batch_size = batch_size
         assert self.lambda1 >= 1, "Lambda value must be greater than or equal to 1"
+
+    def forward_pass(self, model, t, nu, coords):
+        u_batches = []
+        p_batches = []
+        for i in range(0, t.shape[0], self.batch_size):
+            sub_t = t[i:i+self.batch_size]
+            sub_nu = nu[i:i+self.batch_size]
+            sub_coords = [c[i:i+self.batch_size] for c in coords]
+            sub_u, sub_p = model(sub_t, sub_nu, *sub_coords)
+            u_batches.append(sub_u)
+            p_batches.append(sub_p)
+        return torch.cat(u_batches), torch.cat(p_batches)
 
     def heat_residual_loss_nd(self, model, t, nu, *coords, w):
         for coord in coords:
             coord.requires_grad = True
         t.requires_grad = True
 
-        u, p = model(t, nu, *coords)
+        u, p = self.forward_pass(model, t, nu, coords)
 
         # Compute ut through autograd
         u_t = torch.autograd.grad(
@@ -151,7 +175,7 @@ class HeatTrainMIM():
             coord.requires_grad = True
 
         # Forward pass to compute u and p
-        u, p = model(t, nu, *coords)
+        u, p = self.forward_pass(model, t, nu, coords)
 
         # For each dimension
         for i, coord in enumerate(coords):
@@ -192,7 +216,7 @@ class HeatTrainMIM():
 def train_heat(model,
                optimizer,
                epochs,
-               batch_size,
+               n_points,
                boundaries,
                loss_calculator,
                scheduler=None,
@@ -224,10 +248,10 @@ def train_heat(model,
         model.train()
 
         # Create all tensors on CPU first
-        t = torch.rand((batch_size, 1))
+        t = torch.rand((n_points, 1))
         log_a, log_b = torch.log(torch.tensor(1e-10)), torch.log(torch.tensor(1.0))
-        nu = torch.exp(torch.empty(batch_size, 1).uniform_(log_a, log_b))
-        coords = [torch.rand((batch_size, 1)) for _ in range(len(boundaries))]
+        nu = torch.exp(torch.empty(n_points, 1).uniform_(log_a, log_b))
+        coords = [torch.rand((n_points, 1)) for _ in range(len(boundaries))]
 
         # Move all tensors to the same device before concatenation
         t = t.to(accelerator.device)

@@ -42,6 +42,8 @@ def tune(trial, n_dims, mim: bool, equation: str):
     else:
         raise ValueError(f"Equation {equation} not supported")
 
+    batch_size = trial.suggest_categorical("batch_size", [256, 512, 1024, 2048])
+
     # Model creation based on type (MIM or DGM)
     if mim:
         u_model_params = get_model_hyper_params(trial, "u")
@@ -55,7 +57,7 @@ def tune(trial, n_dims, mim: bool, equation: str):
         model = mim_model(**model_params)
 
         lambda1 = trial.suggest_float("lambda1", 1, 10, log=True)
-        trainer = mim_trainer(lambda1=lambda1, use_stochastic=use_stochastic)
+        trainer = mim_trainer(batch_size, lambda1=lambda1, use_stochastic=use_stochastic)
     else:
         model_params = get_model_hyper_params(trial, "dgm")
         model_params["spatial_dims"] = n_dims
@@ -64,7 +66,8 @@ def tune(trial, n_dims, mim: bool, equation: str):
         model = DGM(**model_params)
         lambda1 = trial.suggest_float("lambda1", 1, 10, log=True)
         lambda2 = trial.suggest_float("lambda2", 1, 10, log=True)
-        trainer = dgm_trainer(lambda1=lambda1, lambda2=lambda2, use_stochastic=use_stochastic)
+        trainer = dgm_trainer(batch_size, lambda1=lambda1, lambda2=lambda2,
+                              use_stochastic=use_stochastic)
 
     # Optimizer and scheduler setup
     lr = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
@@ -82,7 +85,7 @@ def tune(trial, n_dims, mim: bool, equation: str):
         scheduler = None
 
     epochs = CONFIG["epochs"]
-    batch_size = CONFIG["n_points"]
+    n_points = CONFIG["n_points"]
     num_samples = CONFIG["num_samples"]
 
     # For MIM models, disable mixed precision
@@ -92,7 +95,7 @@ def tune(trial, n_dims, mim: bool, equation: str):
         model=model,
         optimizer=optimizer,
         epochs=epochs,
-        batch_size=batch_size,
+        n_points=n_points,
         boundaries=boundaries,
         loss_calculator=trainer,
         num_samples=num_samples,
@@ -114,7 +117,7 @@ def main():
             # DGM optimization
             dgm_study = optuna.create_study(
                 direction="minimize",
-                storage=f"sqlite:///{db_path}",
+                storage=f"{db_path}",
                 study_name=f"dgm_{equation}_{dim}D",
                 load_if_exists=True,)
             completed_trials = len([s for s in dgm_study.trials if s.state == TrialState.COMPLETE])
@@ -130,7 +133,7 @@ def main():
             # MIM optimization
             mim_study = optuna.create_study(
                 direction="minimize",
-                storage=f"sqlite:///{db_path}",
+                storage=f"{db_path}",
                 study_name=f"mim_{equation}_{dim}D",
                 load_if_exists=True,)
 
