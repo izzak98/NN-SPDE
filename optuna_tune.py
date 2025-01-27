@@ -114,35 +114,44 @@ def main():
     equations = ["heat", "burger", "kpz"]
     for equation in equations:
         for dim in dims:
-            # DGM optimization
-            dgm_study = optuna.create_study(
-                direction="minimize",
-                storage=f"{db_path}",
-                study_name=f"dgm_{equation}_{dim}D",
-                load_if_exists=True,)
-            completed_trials = len([s for s in dgm_study.trials if s.state == TrialState.COMPLETE])
-            remaining_trials = n_optuna_trials - completed_trials
-            if remaining_trials > 0:
+            completed_trials = 0
+            while True:
+                # DGM optimization
+                dgm_study = optuna.create_study(
+                    direction="minimize",
+                    storage=f"{db_path}",
+                    study_name=f"dgm_{equation}_{dim}D",
+                    load_if_exists=True,)
+                completed_trials = len(
+                    [s for s in dgm_study.trials if s.state == TrialState.COMPLETE])
+                if completed_trials >= n_optuna_trials:
+                    break
+
+                completed_trials = len(
+                    [s for s in dgm_study.trials if s.state == TrialState.COMPLETE])
                 dgm_study.optimize(
                     lambda trial: tune(trial, dim, mim=False, equation=equation),
-                    n_trials=remaining_trials,
+                    n_trials=1,
                     timeout=None,
                     n_jobs=n_jobs,
                 )
 
-            # MIM optimization
-            mim_study = optuna.create_study(
-                direction="minimize",
-                storage=f"{db_path}",
-                study_name=f"mim_{equation}_{dim}D",
-                load_if_exists=True,)
+            completed_trials = 0
+            while True:
+                # MIM optimization
+                mim_study = optuna.create_study(
+                    direction="minimize",
+                    storage=f"{db_path}",
+                    study_name=f"mim_{equation}_{dim}D",
+                    load_if_exists=True,)
 
-            completed_trials = len([s for s in mim_study.trials if s.state == TrialState.COMPLETE])
-            remaining_trials = n_optuna_trials - completed_trials
-            if remaining_trials > 0:
+                completed_trials = len(
+                    [s for s in mim_study.trials if s.state == TrialState.COMPLETE])
+                if completed_trials >= n_optuna_trials:
+                    break
                 mim_study.optimize(
                     lambda trial: tune(trial, dim, mim=True, equation=equation),
-                    n_trials=remaining_trials,
+                    n_trials=1,
                     timeout=None,
                     n_jobs=n_jobs,
                 )
