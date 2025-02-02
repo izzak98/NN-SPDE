@@ -103,7 +103,12 @@ class HeatMIM(MIM):
     def forward(self, t, nu, *args):
         # Combine inputs
         x = torch.cat(args, dim=1)
-        inps = torch.cat([t, nu, x], dim=1)
+        try:
+            inps = torch.cat([t, nu, x], dim=1)
+        except Exception as e:
+            print(f"t: {t.shape}, nu: {nu.shape}, x: {x.shape}")
+            print(f"t: {t.device}, nu: {nu.device}, x: {x.device}")
+            raise e
 
         # Compute u
         u_base = self.u_input_layer(inps)
