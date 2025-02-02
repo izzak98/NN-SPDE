@@ -38,7 +38,10 @@ class HeatTrainDGM():
             sub_t = t[i:i+self.batch_size]
             sub_nu = nu[i:i+self.batch_size]
             sub_coords = [c[i:i+self.batch_size] for c in coords]
-            batches.append(model(sub_t, sub_nu, *sub_coords))
+            u = model(sub_t, sub_nu, *sub_coords)
+            if isinstance(u, tuple):
+                u = u[0]
+            batches.append(u)
         return torch.cat(batches)
 
     def heat_residual_loss_nd(self, model, t, nu, *coords, w):
@@ -75,11 +78,10 @@ class HeatTrainDGM():
 
             coords_min[dim] = min_val * torch.ones_like(coords_min[dim])
             coords_max[dim] = max_val * torch.ones_like(coords_max[dim])
-
             for coords in [coords_min, coords_max]:
                 coord = coords[dim]
                 coord.requires_grad = True
-
+                coords = [c.to(t.device) for c in coords]
                 u = self.forward_pass(model, t, nu, coords)
                 du_dx = torch.autograd.grad(
                     u, coord, grad_outputs=torch.ones_like(u), create_graph=True)[0]
@@ -243,6 +245,7 @@ def train_heat(model,
 
     best_loss = float("inf")
     pbar = tqdm(range(epochs), desc="Training")
+    best_weights = None
 
     for epoch in pbar:
         model.train()
@@ -281,16 +284,19 @@ def train_heat(model,
 
         if losses["unadjusted_total_loss"] < best_loss:
             best_loss = losses["unadjusted_total_loss"]
+            best_weights = model.state_dict()
             # Save using accelerator
-            accelerator.save({
-                "epoch": epoch,
-                "model_state_dict": accelerator.unwrap_model(model).state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "loss": loss,
-            }, log_dir / "best_model.pt")
+            # accelerator.save({
+            #     "epoch": epoch,
+            #     "model_state_dict": accelerator.unwrap_model(model).state_dict(),
+            #     "optimizer_state_dict": optimizer.state_dict(),
+            #     "loss": loss,
+            # }, log_dir / "best_model.pt")
 
         if any([l.item() < 1e-16 for l in losses.values()]):
             return float("inf")
 
+    # Load best weights
+    model.load_state_dict(best_weights)
     writer.close()
     return best_loss

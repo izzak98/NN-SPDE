@@ -40,7 +40,10 @@ class KPZTrainDGM():
             sub_alpha = alpha[i:i+self.batch_size]
             sub_lambda_kpz = lambda_kpz[i:i+self.batch_size]
             sub_coords = [coord[i:i+self.batch_size] for coord in coords]
-            batch.append(model(sub_t, sub_nu, sub_alpha, sub_lambda_kpz, *sub_coords))
+            u = model(sub_t, sub_nu, sub_alpha, sub_lambda_kpz, *sub_coords)
+            if isinstance(u, tuple):
+                u = u[0]
+            batch.append(u)
         return torch.cat(batch)
 
     def kpz_residual_loss_nd(self, model, t, nu, alpha, lambda_kpz, *coords, w):
@@ -289,12 +292,12 @@ def train_kpz(model,
 
         if losses["unadjusted_total_loss"] < best_loss:
             best_loss = losses["unadjusted_total_loss"]
-            accelerator.save({
-                "epoch": epoch,
-                "model_state_dict": accelerator.unwrap_model(model).state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "loss": loss,
-            }, log_dir / "best_model.pt")
+            # accelerator.save({
+            #     "epoch": epoch,
+            #     "model_state_dict": accelerator.unwrap_model(model).state_dict(),
+            #     "optimizer_state_dict": optimizer.state_dict(),
+            #     "loss": loss,
+            # }, log_dir / "best_model.pt")
 
         if any([l.item() < 1e-16 for l in losses.values()]):
             return float("inf")

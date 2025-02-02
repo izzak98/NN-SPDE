@@ -39,7 +39,10 @@ class BurgerTrainDGM():
             sub_nu = nu[i:i + self.batch_size]
             sub_alpha = alpha[i:i + self.batch_size]
             sub_coords = [coord[i:i + self.batch_size] for coord in coords]
-            batches.append(model(sub_t, sub_nu, sub_alpha, *sub_coords))
+            u = model(sub_t, sub_nu, sub_alpha, *sub_coords)
+            if isinstance(u, tuple):
+                u = u[0]
+            batches.append(u)
         return torch.cat(batches)
 
     def burger_residual_loss_nd(self, model, t, nu, alpha, *coords, w):
@@ -246,6 +249,7 @@ def train_burger(model,
 
     best_loss = float("inf")
     pbar = tqdm(range(epochs), desc="Training")
+    best_weights = None
 
     for epoch in pbar:
         model.train()
@@ -277,15 +281,16 @@ def train_burger(model,
 
         if losses["unadjusted_total_loss"] < best_loss:
             best_loss = losses["unadjusted_total_loss"]
-            accelerator.save({
-                "epoch": epoch,
-                "model_state_dict": accelerator.unwrap_model(model).state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "loss": loss,
-            }, log_dir / "best_model.pt")
+            best_weights = model.state_dict()
+            # accelerator.save({
+            #     "epoch": epoch,
+            #     "model_state_dict": accelerator.unwrap_model(model).state_dict(),
+            #     "optimizer_state_dict": optimizer.state_dict(),
+            #     "loss": loss,
+            # }, log_dir / "best_model.pt")
 
         if any([l.item() < 1e-16 for l in losses.values()]):
             return float("inf")
-
+    model.load_state_dict(best_weights)
     writer.close()
     return best_loss
