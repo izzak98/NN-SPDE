@@ -501,7 +501,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
         description="Train a PINN for a heat-type PDE with stochastic forcing.")
-    parser.add_argument("--spatial_dims", type=int, default=16,
+    parser.add_argument("--spatial_dims", type=int, default=8,
                         help="Number of spatial dimensions (default: 2)")
     parser.add_argument("--forcing_type", type=str, default="linear", choices=["linear", "exp_linear", "square"],
                         help="Type of forcing function (default: linear)")

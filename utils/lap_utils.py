@@ -193,10 +193,10 @@ class UltraLaplacianComputer:
         batch_size = u.shape[0]
 
         # Strategy selection based on problem characteristics
-        if batch_size > 10000:
+        if batch_size >= 5000:
             # Very large batch: use memory pooling
             return _laplacian_memory_pool(u, pts, d)
-        elif d > 20:
+        elif d > 8:
             # High dimensional: use custom autograd for efficiency
             return _laplacian_custom_autograd(u, pts, d)
         elif batch_size < 100 and d < 10:
