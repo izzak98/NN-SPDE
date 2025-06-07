@@ -318,7 +318,7 @@ def train_pinn(
     # ───── Logging ─────
 
     tb_dir = os.path.join(
-        run_path, f"{datetime.now():%Y%m%d_%H%M%S}_pinn_heat_{d}d_{forcing_type}")
+        run_path, f"{datetime.now():%Y%m%d_%H%M%S}_pinn_heat_{d}d_{forcing_type}_mc_samples_{m_samples}_noise_{noise_name}")
     writer = SummaryWriter(tb_dir)
     print(f"📝  TensorBoard logs: {tb_dir}")
     print("🏋️  Training PINN …")
