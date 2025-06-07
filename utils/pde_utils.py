@@ -1,7 +1,6 @@
 from __future__ import annotations
 import numpy as np
 import torch
-from typing import Optional
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

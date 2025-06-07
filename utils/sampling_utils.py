@@ -1,6 +1,6 @@
+import time
 import torch
 import numpy as np
-import time
 
 
 def shifted_gaussian_white_noise(t: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor, seed: int = None):
