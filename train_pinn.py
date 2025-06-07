@@ -12,12 +12,14 @@ Key features
 from __future__ import annotations
 from typing import Callable
 import os
+import json
+from datetime import datetime
+
 
 # ───────────────────── 3rd-party imports ──────────────────────
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -222,6 +224,7 @@ def train_pinn(
     plot_interval: int = 500,
     noise_boundaries: tuple[tuple[float, float], ...] = ((0.1, 0.5), (0.1, 1.0)),
     save_model: bool = True,
+    run_path: str = "runs",
 ) -> nn.Module:
     """
     Main training loop for Physics-Informed Neural Network (PINN).
@@ -274,6 +277,8 @@ def train_pinn(
         Random seed for reproducibility
     save_model : bool, default=True
         Whether to save the trained model
+    run_path : str, default="runs"
+        Directory to save TensorBoard logs and model checkpoints
 
     Returns
     -------
@@ -282,7 +287,7 @@ def train_pinn(
     """
     # ───── Problem setup ─────
     d = spatial_dims
-    scaling = 1/max(10*round(np.sqrt(d)-1), 1.0)  # scale output to match PDE units
+    scaling = d ** (-np.log(10) / np.log(2)) * 10  # scale output to for better training stability
 
     # Compute vartheta
     vartheta = np.sqrt(d) * np.log10(np.exp(d))
@@ -293,7 +298,7 @@ def train_pinn(
         raise ValueError(f"forcing_type must be one of {valid_forcing_types}, got {forcing_type}")
 
     # ───── Network ─────
-    input_dim = d + add_dims         # t + x_d + ν + μ + σ
+    input_dim = d + add_dims
     model = FNN(input_dim, hidden_dim=hidden_dim, num_layers=num_layers).to(DEVICE)
 
     #  ───── Noise Function ─────
@@ -314,7 +319,8 @@ def train_pinn(
 
     # ───── Logging ─────
 
-    tb_dir = f"runs/{datetime.now():%Y%m%d_%H%M%S}_pinn_heat_{d}d_{forcing_type}"
+    tb_dir = os.path.join(
+        run_path, f"{datetime.now():%Y%m%d_%H%M%S}_pinn_heat_{d}d_{forcing_type}")
     writer = SummaryWriter(tb_dir)
     print(f"📝  TensorBoard logs: {tb_dir}")
     print("🏋️  Training PINN …")
@@ -446,23 +452,129 @@ def train_pinn(
 #                             Entrypoint
 # ======================================================================
 
+def pinn_scaling(d):
+    """
+    Compute scaling rules for PINNs as functions of dimension `d`.
+
+    Returns:
+        p (int): neurons per layer (width)
+        L (int): number of layers (depth)
+        n (int): number of collocation points
+    """
+    # Width scales like 128 * sqrt(d / 2)
+    p = int(np.round(128 * np.sqrt(d / 2)))
+
+    # Depth grows log-linearly: 6 + 2 * log2(d / 2)
+    L = int(np.round(6 + 2 * np.log2(d / 2)))
+
+    # Number of collocation points grows quadratically: 1000 * (d / 2)^2
+    n = int(np.round(1000 * (d / 2) ** 2))
+
+    return p, L, n
+
+
 if __name__ == "__main__":
-    # torch.manual_seed(42)
-    # np.random.seed(42)
-    # for forcing_type in ["linear", "exp_linear", "square"]:
-    #     train_pinn(forcing_type=forcing_type, n_pde=10000)
-    # train_pinn(analytical_mean_solution=time_shifted_gaussian_analytical_mean_solution,
-    #            noise_function=time_dependant_gaussian_white_noise,
-    #            forcing_type="square",
-    #            n_pde=1000,
-    #            spatial_dims=16,
-    #            add_dims=4
-    #            )
-    train_pinn(
-        noise_function=ou_process,
-        analytical_mean_solution=ou_analytical_mean_solution,
-        add_dims=5,
-        forcing_type="linear",
-        noise_boundaries=((0.5, 2.5), (0.1, 0.5), (0.1, 1.0)),
-        spatial_dims=16
+    # Add system arguments for flexibility
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Train a PINN for a heat-type PDE with stochastic forcing.")
+    parser.add_argument("--spatial_dims", type=int, default=2,
+                        help="Number of spatial dimensions (default: 2)")
+    parser.add_argument("--forcing_type", type=str, default="linear", choices=["linear", "exp_linear", "square"],
+                        help="Type of forcing function (default: linear)")
+    parser.add_argument("--noise_function", type=str, default="ou_process", choices=["time_dependant_gaussian_white_noise", "ou_process", "compound_poisson_process"],
+                        help="Noise function to use (default: ou_process)")
+    parser.add_argument("--epochs", type=int, default=10_000,
+                        help="Number of training epochs (default: 10_000)")
+    parser.add_argument("--n_pde", type=int, default=1000,
+                        help="Number of interior points for PDE residual (default: 1000)")
+    parser.add_argument("--n_bc", type=int, default=100,
+                        help="Number of boundary points (default: 100)")
+    parser.add_argument("--n_ic", type=int, default=100,
+                        help="Number of initial condition points (default: 100)")
+    parser.add_argument("--n_test", type=int, default=1000,
+                        help="Number of test points for L2 error computation (default: 1000)")
+    parser.add_argument("--m_samples", type=int, default=10,
+                        help="Number of Monte Carlo samples for PDE loss computation (default: 10)")
+    parser.add_argument("--save_path", type=str, default="runs",
+                        help="Directory to save TensorBoard logs (default: runs)")
+
+    # Parse arguments
+    args = parser.parse_args()
+    # Select noise function based on argument
+    noise_function_map = {
+        "time_dependant_gaussian_white_noise": time_dependant_gaussian_white_noise,
+        "ou_process": ou_process,
+        "compound_poisson_process": compound_poisson_process,
+    }
+    analytical_solution_map = {
+        "time_dependant_gaussian_white_noise": time_shifted_gaussian_analytical_mean_solution,
+        "ou_process": ou_analytical_mean_solution,
+        "compound_poisson_process": compound_poisson_analytical_mean_solution,
+    }
+    if args.noise_function == "time_dependant_gaussian_white_noise":
+        add_dims = 4  # μ, σ, ν
+        noise_boundaries = ((0.1, 0.5), (0.1, 1.0))
+    elif args.noise_function == "ou_process":
+        add_dims = 5
+        noise_boundaries = ((0.5, 2.0), (0.1, 0.5), (0.1, 1.0))
+    elif args.noise_function == "compound_poisson_process":
+        add_dims = 5
+        noise_boundaries = ((0.1, 5.0), (0.1, 0.5), (0.1, 1.0))
+    else:  # pragma: no cover
+        raise ValueError(f"Unsupported noise function: {args.noise_function}")
+
+    noise_function = noise_function_map[args.noise_function]
+    analytical_mean_solution = analytical_solution_map[args.noise_function]
+
+    # Compute scaling rules based on spatial dimensions
+    hidden_dim, num_layers, n_pde = pinn_scaling(args.spatial_dims)
+    n_ic = n_bc = n_pde // 10  # 10% of PDE points for IC and BC
+
+    # Confirm settings for the user
+    print(f"🔊 Using noise function: {args.noise_function}"
+          f" ({noise_function.__name__})")
+    print(f"🔧 Using analytical mean solution: {analytical_mean_solution.__name__}")
+    print(f"🔧 Using noise boundaries: {noise_boundaries}")
+    print(f"🔧 Using add_dims: {add_dims} ({args.noise_function})")
+    print(f"🔧 Using spatial_dims: {args.spatial_dims} ({args.noise_function})")
+    print(f"🔧 Using forcing_type: {args.forcing_type}")
+    print(f"🔧 Using epochs: {args.epochs}")
+    print(f"🔧 Using n_pde: {n_pde}")
+    print(f"🔧 Using n_ic: {n_ic}")
+    print(f"🔧 Using n_bc: {n_bc}")
+    print(f"🔧 Using n_test: {args.n_test}")
+    print(f"🔧 Using m_samples: {args.m_samples}")
+    print(f"🔧 Using hidden_dim: {hidden_dim}")
+    print(f"🔧 Using num_layers: {num_layers}")
+    print(f"🔧 Using add_dims: {add_dims}")
+
+    # Train the PINN
+    model = train_pinn(
+        noise_function=noise_function,
+        analytical_mean_solution=analytical_mean_solution,
+        spatial_dims=args.spatial_dims,
+        add_dims=add_dims,
+        forcing_type=args.forcing_type,
+        lambda_pde=1.0,
+        lambda_bc=10.0,
+        lambda_ic=10.0,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        T=1.0,  # Default final time
+        lr=1e-3,  # Learning rate
+        m_samples=args.m_samples,
+        epochs=args.epochs,
+        nu_range=(0.01, 0.1),  # Default viscosity range
+        scheduler_gamma=0.9995,
+        n_pde=n_pde,
+        n_bc=n_bc,
+        n_ic=n_ic,
+        n_test=args.n_test,
+        log_interval=10,
+        tensorboard_interval=100,
+        plot_interval=500,
+        noise_boundaries=noise_boundaries,
+        save_model=False,  # Set to True if you want to save the model
     )
+    print("🏁 Training complete. Model ready for evaluation.")
