@@ -132,22 +132,20 @@ def compute_losses(
         res = compute_pde_residual(
             model, p_pts, w_t, vartheta, noise_args, forcing_type=forcing_type
         )
-        pde_loss += (res.pow(2)).mean()/scaling
+        pde_loss += (res.pow(2)).mean()
     pde_loss /= m_samples
 
     # ───── Boundary (Dirichlet) loss : u = 0 on ∂Ω ─────
     bc_pts = sample_boundary_points(n_bc, d, T, nu_range).to(DEVICE)
     bc_noise_args = [na[: bc_pts.shape[0]] for na in noise_args]
-    bc_pred = model(torch.cat([bc_pts, *bc_noise_args], dim=1)) * \
-        scaling  # scale output to match PDE units
+    bc_pred = model(torch.cat([bc_pts, *bc_noise_args], dim=1))
     bc_loss = (bc_pred.pow(2)/scaling).mean()
 
     # ───── Initial-time loss : u(0,x) = vartheta·G(x) ─────
     ic_pts, ic_true = sample_initial_points(n_ic, d, vartheta, nu_range)
     ic_pts, ic_true = ic_pts.to(DEVICE), ic_true.to(DEVICE)
     ic_noise_args = [na[: n_ic] for na in noise_args]
-    ic_pred = model(torch.cat([ic_pts, *ic_noise_args], dim=1)) * \
-        scaling  # scale output to match PDE units
+    ic_pred = model(torch.cat([ic_pts, *ic_noise_args], dim=1))
     ic_loss = ((ic_pred - ic_true).pow(2)/scaling).mean()
 
     return pde_loss, bc_loss, ic_loss
@@ -576,5 +574,6 @@ if __name__ == "__main__":
         plot_interval=500,
         noise_boundaries=noise_boundaries,
         save_model=False,  # Set to True if you want to save the model
+        run_path=args.save_path,
     )
     print("🏁 Training complete. Model ready for evaluation.")
