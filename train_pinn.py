@@ -466,7 +466,7 @@ def pinn_scaling(d):
     L = int(np.round(6 + 2 * np.log2(d / 2)))
 
     # Number of collocation points grows quadratically: 1000 * (d / 2)^2
-    n = int(np.round(1000 * (d / 2) ** 2))
+    n = max(int(np.round(1000 * (d / 2) ** 2)), 5000)
 
     return p, L, n
 
@@ -490,8 +490,8 @@ if __name__ == "__main__":
                         help="Number of boundary points (default: 100)")
     parser.add_argument("--n_ic", type=int, default=100,
                         help="Number of initial condition points (default: 100)")
-    parser.add_argument("--n_test", type=int, default=1000,
-                        help="Number of test points for L2 error computation (default: 1000)")
+    parser.add_argument("--n_test", type=int, default=10000,
+                        help="Number of test points for L2 error computation (default: 10000)")
     parser.add_argument("--m_samples", type=int, default=10,
                         help="Number of Monte Carlo samples for PDE loss computation (default: 10)")
     parser.add_argument("--save_path", type=str, default="runs",
