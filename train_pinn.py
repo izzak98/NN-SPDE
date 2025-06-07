@@ -43,6 +43,7 @@ from utils.pde_utils import (
     compound_poisson_analytical_mean_solution,
     ou_analytical_mean_solution,
 )
+from utils.lap_utils import UltraLaplacianComputer
 
 # ────────────────────────── device ────────────────────────────
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -53,14 +54,7 @@ print(f"🖥️  Using device: {DEVICE}")
 #                            Loss functions
 # ======================================================================
 
-def _laplacian(u: torch.Tensor, pts: torch.Tensor, d: int) -> torch.Tensor:
-    """Compute ∇²u via autograd for the *spatial* coordinates only."""
-    grads = torch.autograd.grad(u.sum(), pts, create_graph=True)[0]
-    lap = 0.0
-    for i in range(1, d + 1):                  # skip time column
-        grad_i = grads[:, i: i + 1]
-        lap += torch.autograd.grad(grad_i.sum(), pts, create_graph=True)[0][:, i: i + 1]
-    return lap
+_laplacian = UltraLaplacianComputer()
 
 
 def compute_pde_residual(
@@ -72,37 +66,68 @@ def compute_pde_residual(
     *,
     forcing_type: str = "linear",
     scaling: float = 1.0,
+    buffer: torch.Tensor = None,  # Optional pre-allocated buffer
 ) -> torch.Tensor:
     """
-    Return PDE residual  r = u_t − ν ∇²u − f·vartheta·∏ sin(π x_i).
+    Aggressively memory-optimized version using pre-allocated buffers.
     """
-    pts.requires_grad_(True)                 # enable autograd w.r.t. inputs
-    model_in = torch.cat([pts, *noise_args], dim=1)
-    u = model(model_in) * scaling  # scale output to match PDE units
+    pts.requires_grad_(True)
 
-    nu = pts[:, -1:]                    # viscosity column
-    d = pts.shape[1] - 2               # #spatial dims
+    # Use pre-allocated buffer for model input if provided
+    if buffer is not None and noise_args:
+        buffer[:, :pts.shape[1]] = pts
+        start_idx = pts.shape[1]
+        for noise_arg in noise_args:
+            end_idx = start_idx + noise_arg.shape[1]
+            buffer[:, start_idx:end_idx] = noise_arg
+            start_idx = end_idx
+        model_in = buffer[:, :start_idx]
+    else:
+        model_in = torch.cat([pts, *noise_args], dim=1) if noise_args else pts
+
+    u = model(model_in)
+    if scaling != 1.0:
+        u.mul_(scaling)  # in-place scaling
+
+    # Extract components (views, no memory allocation)
+    nu = pts[:, -1:]
+    d = pts.shape[1] - 2
     x_space = pts[:, 1: 1 + d]
-    t = pts[:, 0:1]                  # time column
+    t = pts[:, 0:1]
 
-    du_dt = torch.autograd.grad(u.sum(), pts, create_graph=True)[0][:, 0:1]
+    # Efficient gradient computation
+    grad_outputs = torch.ones_like(u)
+    du_dt = torch.autograd.grad(u, pts, grad_outputs, create_graph=True)[0][:, 0:1]
+
     lap_u = _laplacian(u, pts, d)
 
-    # Forcing  f(t)·vartheta·G(x)
-    Gx = torch.prod(torch.sin(np.pi * x_space), dim=1, keepdim=True)
+    # Efficient forcing computation using temporary tensor
+    temp = x_space * np.pi
+    torch.sin_(temp)
+    Gx = torch.prod(temp, dim=1, keepdim=True)
+
+    # Build forcing term step by step to minimize allocations
     if forcing_type == "linear":
-        forcing = w_t * vartheta * Gx
+        forcing = w_t * vartheta
     elif forcing_type == "exp_linear":
-        forcing = torch.exp(-t) * w_t * vartheta * Gx
+        forcing = torch.exp(-t)
+        forcing *= w_t * vartheta
     elif forcing_type == "square":
-        forcing = (w_t**2) * vartheta * Gx
-    else:  # pragma: no cover
+        forcing = w_t * w_t * vartheta
+    else:
         raise ValueError(f"Unsupported forcing type: {forcing_type}")
 
-    return (du_dt - nu * lap_u - forcing)/scaling      # residual r(t,x,ν)
+    forcing *= Gx
 
+    # Final computation
+    residual = du_dt - nu * lap_u - forcing
+    if scaling != 1.0:
+        residual.div_(scaling)
+
+    return residual
 
 # ----------------------------------------------------------------------
+
 
 def compute_losses(
     model: nn.Module,
@@ -466,7 +491,7 @@ def pinn_scaling(d):
     L = int(np.round(6 + 2 * np.log2(d / 2)))
 
     # Number of collocation points grows quadratically: 1000 * (d / 2)^2
-    n = max(int(np.round(1000 * (d / 2) ** 2)), 5000)
+    n = min(int(np.round(1000 * (d / 2) ** 2)), 5000)
 
     return p, L, n
 
@@ -476,7 +501,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
         description="Train a PINN for a heat-type PDE with stochastic forcing.")
-    parser.add_argument("--spatial_dims", type=int, default=2,
+    parser.add_argument("--spatial_dims", type=int, default=16,
                         help="Number of spatial dimensions (default: 2)")
     parser.add_argument("--forcing_type", type=str, default="linear", choices=["linear", "exp_linear", "square"],
                         help="Type of forcing function (default: linear)")
