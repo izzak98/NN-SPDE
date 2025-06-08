@@ -111,7 +111,7 @@ def compute_pde_residual(
         forcing = w_t * vartheta
     elif forcing_type == "exp_linear":
         forcing = torch.exp(-t)
-        forcing *= w_t * vartheta
+        forcing = forcing * w_t * vartheta
     elif forcing_type == "square":
         forcing = w_t * w_t * vartheta
     else:
@@ -501,20 +501,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(
         description="Train a PINN for a heat-type PDE with stochastic forcing.")
-    parser.add_argument("--spatial_dims", type=int, default=8,
+    parser.add_argument("--spatial_dims", type=int, default=2,
                         help="Number of spatial dimensions (default: 2)")
-    parser.add_argument("--forcing_type", type=str, default="linear", choices=["linear", "exp_linear", "square"],
+    parser.add_argument("--forcing_type", type=str, default="exp_linear", choices=["linear", "exp_linear", "square"],
                         help="Type of forcing function (default: linear)")
     parser.add_argument("--noise_function", type=str, default="ou_process", choices=["time_dependant_gaussian_white_noise", "ou_process", "compound_poisson_process"],
                         help="Noise function to use (default: ou_process)")
     parser.add_argument("--epochs", type=int, default=10_000,
                         help="Number of training epochs (default: 10_000)")
-    parser.add_argument("--n_pde", type=int, default=1000,
-                        help="Number of interior points for PDE residual (default: 1000)")
-    parser.add_argument("--n_bc", type=int, default=100,
-                        help="Number of boundary points (default: 100)")
-    parser.add_argument("--n_ic", type=int, default=100,
-                        help="Number of initial condition points (default: 100)")
     parser.add_argument("--n_test", type=int, default=10000,
                         help="Number of test points for L2 error computation (default: 10000)")
     parser.add_argument("--m_samples", type=int, default=10,
