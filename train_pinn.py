@@ -12,7 +12,6 @@ Key features
 from __future__ import annotations
 from typing import Callable
 import os
-import json
 from datetime import datetime
 
 
@@ -356,7 +355,6 @@ def train_pinn(
     for epoch in bar:
         model.train()
 
-        # Fresh Gaussian parameters each epoch
         noise_args = sample_noise_args(
             n_points=max(n_pde, n_bc, n_ic),
             n_args=2,
@@ -530,13 +528,13 @@ if __name__ == "__main__":
         "compound_poisson_process": compound_poisson_analytical_mean_solution,
     }
     if args.noise_function == "time_dependant_gaussian_white_noise":
-        add_dims = 4  # μ, σ, ν
+        add_dims = 4  # μ, σ,
         noise_boundaries = ((0.1, 0.5), (0.1, 1.0))
     elif args.noise_function == "ou_process":
-        add_dims = 5
+        add_dims = 5  # theta, mu, sigma
         noise_boundaries = ((0.5, 2.0), (0.1, 0.5), (0.1, 1.0))
     elif args.noise_function == "compound_poisson_process":
-        add_dims = 5
+        add_dims = 5  # lambda, mu, sigma
         noise_boundaries = ((0.1, 5.0), (0.1, 0.5), (0.1, 1.0))
     else:  # pragma: no cover
         raise ValueError(f"Unsupported noise function: {args.noise_function}")
